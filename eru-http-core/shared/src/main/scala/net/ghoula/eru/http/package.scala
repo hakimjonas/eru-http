@@ -1,0 +1,93 @@
+package net.ghoula.eru
+
+/** Core types and utilities for HTTP as defined in RFC 9110.
+  *
+  * This package provides type-safe representations of HTTP concepts that make invalid states
+  * unrepresentable at compile time.
+  *
+  * Import `net.ghoula.eru.http.*` to get started.
+  */
+package object http {
+
+  /** Common HTTP error type.
+    */
+  enum HttpError {
+    case InvalidMethod(error: Method.InvalidMethod)
+    case InvalidStatusCode(error: StatusCode.InvalidStatusCode)
+    case InvalidUri(error: Uri.InvalidUri)
+    case InvalidMediaType(error: MediaType.InvalidMediaType)
+    case InvalidRequest(error: http.InvalidRequest)
+    case InvalidResponse(error: http.InvalidResponse)
+    case BodyEncodeError(error: http.EncodeError)
+    case BodyDecodeError(error: http.DecodeError)
+    case InvalidCookie(error: Cookie.InvalidCookie)
+    case NetworkError(msg: String, cause: Option[Throwable] = None)
+    case TimeoutError(msg: String)
+    case ConnectionError(msg: String, cause: Option[Throwable] = None)
+    case ProtocolError(msg: String, rfc: String)
+
+    def message: String = this match {
+      case InvalidMethod(e) => e.getMessage
+      case InvalidStatusCode(e) => e.getMessage
+      case InvalidUri(e) => e.getMessage
+      case InvalidMediaType(e) => e.getMessage
+      case InvalidRequest(e) => e.getMessage
+      case InvalidResponse(e) => e.getMessage
+      case BodyEncodeError(e) => e.getMessage
+      case BodyDecodeError(e) => e.getMessage
+      case InvalidCookie(e) => e.getMessage
+      case NetworkError(m, _) => m
+      case TimeoutError(m) => m
+      case ConnectionError(m, _) => m
+      case ProtocolError(m, rfc) => s"$m ($rfc)"
+    }
+
+    def toException: Exception = this match {
+      case InvalidMethod(e) => e
+      case InvalidStatusCode(e) => e
+      case InvalidUri(e) => e
+      case InvalidMediaType(e) => e
+      case InvalidRequest(e) => e
+      case InvalidResponse(e) => e
+      case BodyEncodeError(e) => e
+      case BodyDecodeError(e) => e
+      case InvalidCookie(e) => e
+      case NetworkError(m, Some(cause)) => new Exception(m, cause)
+      case NetworkError(m, None) => new Exception(m)
+      case TimeoutError(m) => new Exception(s"Timeout: $m")
+      case ConnectionError(m, Some(cause)) => new Exception(m, cause)
+      case ConnectionError(m, None) => new Exception(m)
+      case ProtocolError(m, rfc) => new Exception(s"$m ($rfc)")
+    }
+  }
+
+  /** Extension methods for working with HTTP in Eru effects.
+    */
+  extension [E, A](eru: Eru[E, Request[A]]) {
+
+    /** Validates the request, converting to HttpError if invalid.
+      */
+    def validateRequest: Eru[E | HttpError, Request[A]] =
+      eru.flatMap { req =>
+        req.validate.mapError(error => HttpError.InvalidRequest(error))
+      }
+  }
+
+  extension [E, A](eru: Eru[E, Response[A]]) {
+
+    /** Validates the response, converting to HttpError if invalid.
+      */
+    def validateResponse: Eru[E | HttpError, Response[A]] =
+      eru.flatMap { res =>
+        res.validate.mapError(error => HttpError.InvalidResponse(error))
+      }
+  }
+
+  /** Common media type shortcuts.
+    */
+  val json: MediaType = MediaType.applicationJson
+  val xml: MediaType = MediaType.applicationXml
+  val html: MediaType = MediaType.textHtml
+  val text: MediaType = MediaType.textPlain
+  val binary: MediaType = MediaType.applicationOctetStream
+}
