@@ -149,91 +149,92 @@ object Cookie {
     *   A parsed Cookie or an InvalidCookie error
     */
   def parseSetCookie(setCookieHeader: String): Eru[InvalidCookie, Cookie] = {
-    Eru.effect {
-      val trimmed = setCookieHeader.trim
-      if trimmed.isEmpty then throw InvalidCookie(setCookieHeader, "Set-Cookie header cannot be empty")
-
+    val trimmed = setCookieHeader.trim
+    if trimmed.isEmpty then {
+      Eru.fail(InvalidCookie(setCookieHeader, "Set-Cookie header cannot be empty"))
+    } else {
       // Split into parts separated by semicolon
       val parts = trimmed.split(';').map(_.trim)
-      if parts.isEmpty then throw InvalidCookie(setCookieHeader, "Invalid Set-Cookie format")
+      if parts.isEmpty then {
+        Eru.fail(InvalidCookie(setCookieHeader, "Invalid Set-Cookie format"))
+      } else {
+        // First part is name=value
+        val nameValue = parts(0)
+        val eqIdx = nameValue.indexOf('=')
+        if eqIdx < 0 then {
+          Eru.fail(InvalidCookie(setCookieHeader, "Cookie must have name=value format"))
+        } else {
+          val name = nameValue.substring(0, eqIdx).trim
+          val value = nameValue.substring(eqIdx + 1).trim
 
-      // First part is name=value
-      val nameValue = parts(0)
-      val eqIdx = nameValue.indexOf('=')
-      if eqIdx < 0 then throw InvalidCookie(setCookieHeader, "Cookie must have name=value format")
+          // Validate name per RFC 6265 Section 4.1.1
+          if !isValidCookieName(name) then {
+            Eru.fail(InvalidCookie(name, "Invalid cookie name"))
+          } else if !isValidCookieValue(value) then {
+            // Validate value per RFC 6265 Section 4.1.1
+            Eru.fail(InvalidCookie(value, "Invalid cookie value"))
+          } else {
+            // Parse attributes using fold to avoid mutable vars
+            final case class Attrs(
+              domain: Option[String] = None,
+              path: Option[String] = None,
+              expires: Option[Instant] = None,
+              maxAge: Option[Long] = None,
+              secure: Boolean = false,
+              httpOnly: Boolean = false,
+              sameSite: Option[SameSite] = None
+            )
 
-      val name = nameValue.substring(0, eqIdx).trim
-      val value = nameValue.substring(eqIdx + 1).trim
+            val attrs = parts.tail.foldLeft(Attrs()) { (acc, part) =>
+              val eqIdx = part.indexOf('=')
+              val (attrName, attrValue) =
+                if eqIdx >= 0 then (part.substring(0, eqIdx).trim.toLowerCase, Some(part.substring(eqIdx + 1).trim))
+                else (part.toLowerCase, None)
 
-      // Validate name per RFC 6265 Section 4.1.1
-      if !isValidCookieName(name) then throw InvalidCookie(name, "Invalid cookie name")
-
-      // Validate value per RFC 6265 Section 4.1.1
-      if !isValidCookieValue(value) then throw InvalidCookie(value, "Invalid cookie value")
-
-      // Parse attributes
-      var domain: Option[String] = None
-      var path: Option[String] = None
-      var expires: Option[Instant] = None
-      var maxAge: Option[Long] = None
-      var secure = false
-      var httpOnly = false
-      var sameSite: Option[SameSite] = None
-
-      parts.tail.foreach { part =>
-        val eqIdx = part.indexOf('=')
-        val (attrName, attrValue) =
-          if eqIdx >= 0 then (part.substring(0, eqIdx).trim.toLowerCase, Some(part.substring(eqIdx + 1).trim))
-          else (part.toLowerCase, None)
-
-        attrName match {
-          case "domain" =>
-            attrValue.foreach { d =>
-              domain = Some(d.stripPrefix("."))
-            }
-          case "path" =>
-            attrValue.foreach { p =>
-              path = Some(p)
-            }
-          case "expires" =>
-            attrValue.foreach { exp =>
-              try {
-                // Try RFC 1123 format first
-                expires = Some(Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(exp)))
-              } catch {
+              attrName match {
+                case "domain" =>
+                  attrValue.map(d => acc.copy(domain = Some(d.stripPrefix(".")))).getOrElse(acc)
+                case "path" =>
+                  attrValue.map(p => acc.copy(path = Some(p))).getOrElse(acc)
+                case "expires" =>
+                  attrValue.flatMap { exp =>
+                    try {
+                      // Try RFC 1123 format first
+                      Some(Instant.from(DateTimeFormatter.RFC_1123_DATE_TIME.parse(exp)))
+                    } catch {
+                      case _ =>
+                        // Ignore invalid date formats per RFC 6265
+                        None
+                    }
+                  }.map(e => acc.copy(expires = Some(e))).getOrElse(acc)
+                case "max-age" =>
+                  attrValue.flatMap { ma =>
+                    try {
+                      Some(ma.toLong)
+                    } catch {
+                      case _: NumberFormatException =>
+                        // Ignore invalid max-age per RFC 6265
+                        None
+                    }
+                  }.map(m => acc.copy(maxAge = Some(m))).getOrElse(acc)
+                case "secure" =>
+                  acc.copy(secure = true)
+                case "httponly" =>
+                  acc.copy(httpOnly = true)
+                case "samesite" =>
+                  attrValue.flatMap { ss =>
+                    SameSite.parse(ss).attempt.unsafeRunSync().fold(_ => None, Some(_))
+                  }.map(s => acc.copy(sameSite = Some(s))).getOrElse(acc)
                 case _ =>
-                  // Ignore invalid date formats per RFC 6265
-                  ()
+                  // Ignore unknown attributes per RFC 6265
+                  acc
               }
             }
-          case "max-age" =>
-            attrValue.foreach { ma =>
-              try {
-                maxAge = Some(ma.toLong)
-              } catch {
-                case _: NumberFormatException =>
-                  // Ignore invalid max-age per RFC 6265
-                  ()
-              }
-            }
-          case "secure" =>
-            secure = true
-          case "httponly" =>
-            httpOnly = true
-          case "samesite" =>
-            attrValue.foreach { ss =>
-              sameSite = SameSite.parse(ss).attempt.unsafeRunSync().fold(_ => None, Some(_))
-            }
-          case _ =>
-            // Ignore unknown attributes per RFC 6265
-            ()
+
+            Eru.succeed(Cookie(name, value, attrs.domain, attrs.path, attrs.expires, attrs.maxAge, attrs.secure, attrs.httpOnly, attrs.sameSite))
+          }
         }
       }
-
-      Cookie(name, value, domain, path, expires, maxAge, secure, httpOnly, sameSite)
-    }.mapError {
-      case e: InvalidCookie => e
-      case e: Throwable => InvalidCookie(setCookieHeader, s"Failed to parse Set-Cookie: ${e.getMessage}")
     }
   }
 
