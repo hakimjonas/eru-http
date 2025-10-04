@@ -102,6 +102,7 @@ private[server] object NettyHttpServer {
           .group(bossGroup, workerGroup)
           .channel(classOf[NioServerSocketChannel])
           .option(ChannelOption.SO_BACKLOG, config.backlog: java.lang.Integer)
+          .option(ChannelOption.SO_REUSEADDR, false: java.lang.Boolean)
           .childOption(ChannelOption.SO_KEEPALIVE, true: java.lang.Boolean)
           .childHandler(new ChannelInitializer[SocketChannel] {
             override def initChannel(ch: SocketChannel): Unit = {

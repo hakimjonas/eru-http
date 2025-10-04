@@ -197,20 +197,19 @@ object Part {
           )
         )
       } else {
-        val params = parts.tail
-        var name: Option[String] = None
-        var filename: Option[String] = None
+        // Parse parameters using fold to avoid mutable vars
+        final case class Params(name: Option[String] = None, filename: Option[String] = None)
 
-        params.foreach { param =>
+        val params = parts.tail.foldLeft(Params()) { (acc, param) =>
           parseParameter(param.trim) match {
-            case ("name", value) => name = Some(value)
-            case ("filename", value) => filename = Some(value)
-            case _ => // ignore other parameters
+            case ("name", value) => acc.copy(name = Some(value))
+            case ("filename", value) => acc.copy(filename = Some(value))
+            case _ => acc // ignore other parameters
           }
         }
 
-        name match {
-          case Some(n) => Eru.succeed((n, filename))
+        params.name match {
+          case Some(n) => Eru.succeed((n, params.filename))
           case None =>
             Eru.fail(
               HttpError.ProtocolError("Content-Disposition must have 'name' parameter", "RFC 7578")
@@ -228,39 +227,55 @@ object Part {
     *   the list of parameter strings
     */
   private def splitParameters(s: String): List[String] = {
-    val parts = scala.collection.mutable.ListBuffer[String]()
-    val current = new StringBuilder
-    var inQuotes = false
-    var escaped = false
-    var i = 0
+    enum State {
+      case Normal
+      case InQuotes
+      case Escaped
+    }
 
-    while i < s.length do {
-      val c = s.charAt(i)
-
-      if escaped then {
-        current.append(c)
-        escaped = false
-      } else if c == '\\' && inQuotes then {
-        current.append(c)
-        escaped = true
-      } else if c == '"' then {
-        current.append(c)
-        inQuotes = !inQuotes
-      } else if c == ';' && !inQuotes then {
-        parts += current.toString
-        current.clear()
+    @scala.annotation.tailrec
+    def loop(pos: Int, state: State, current: StringBuilder, parts: List[String]): List[String] = {
+      if pos >= s.length then {
+        // End of string - add current part if non-empty
+        if current.nonEmpty then current.toString :: parts else parts
       } else {
-        current.append(c)
+        val c = s.charAt(pos)
+        state match {
+          case State.Escaped =>
+            current.append(c)
+            loop(pos + 1, State.InQuotes, current, parts)
+
+          case State.InQuotes =>
+            c match {
+              case '\\' =>
+                current.append(c)
+                loop(pos + 1, State.Escaped, current, parts)
+              case '"' =>
+                current.append(c)
+                loop(pos + 1, State.Normal, current, parts)
+              case _ =>
+                current.append(c)
+                loop(pos + 1, State.InQuotes, current, parts)
+            }
+
+          case State.Normal =>
+            c match {
+              case '"' =>
+                current.append(c)
+                loop(pos + 1, State.InQuotes, current, parts)
+              case ';' =>
+                val newParts = current.toString :: parts
+                current.setLength(0)
+                loop(pos + 1, State.Normal, current, newParts)
+              case _ =>
+                current.append(c)
+                loop(pos + 1, State.Normal, current, parts)
+            }
+        }
       }
-
-      i += 1
     }
 
-    if current.nonEmpty then {
-      parts += current.toString
-    }
-
-    parts.toList
+    loop(0, State.Normal, new StringBuilder, Nil).reverse
   }
 
   /** Parses a single parameter like name="value" or name=value.
@@ -295,24 +310,25 @@ object Part {
     *   the unescaped string
     */
   private def unescapeQuotedString(s: String): String = {
-    val result = new StringBuilder
-    var i = 0
-    var escaped = false
-
-    while i < s.length do {
-      val c = s.charAt(i)
-      if escaped then {
-        result.append(c)
-        escaped = false
-      } else if c == '\\' then {
-        escaped = true
+    @scala.annotation.tailrec
+    def loop(pos: Int, escaped: Boolean, result: StringBuilder): String = {
+      if pos >= s.length then {
+        result.toString
       } else {
-        result.append(c)
+        val c = s.charAt(pos)
+        if escaped then {
+          result.append(c)
+          loop(pos + 1, false, result)
+        } else if c == '\\' then {
+          loop(pos + 1, true, result)
+        } else {
+          result.append(c)
+          loop(pos + 1, false, result)
+        }
       }
-      i += 1
     }
 
-    result.toString
+    loop(0, false, new StringBuilder)
   }
 }
 
