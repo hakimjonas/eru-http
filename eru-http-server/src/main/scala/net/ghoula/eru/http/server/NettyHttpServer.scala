@@ -149,8 +149,12 @@ private[server] object NettyHttpServer {
   }
 
   /** Channel handler that processes HTTP requests.
+    *
+    * TODO: This currently uses unsafeRunSync() which blocks the Netty event loop.
+    * Once Eru provides unsafeRunAsync, this should be refactored to use async execution.
+    * See docs/ERU_ASYNC_REQUIREMENTS.md for details.
     */
-  private class RequestChannelHandler(handler: RequestHandler)(using @annotation.unused runtime: EruRuntime)
+  private class RequestChannelHandler(handler: RequestHandler)(using runtime: EruRuntime)
       extends SimpleChannelInboundHandler[FullHttpRequest] {
 
     override def channelRead0(ctx: ChannelHandlerContext, nettyRequest: FullHttpRequest): Unit = {
@@ -163,7 +167,22 @@ private[server] object NettyHttpServer {
       // Determine if we should keep the connection alive
       val keepAlive = HttpUtil.isKeepAlive(nettyRequest)
 
-      // Convert response and write it
+      // TEMPORARY: Using unsafeRunSync() - this blocks the event loop!
+      // This will be replaced with unsafeRunAsync() once available in Eru.
+      //
+      // Target implementation (requires Eru changes):
+      // runtime.unsafeRunAsync(responseEru.attempt) {
+      //   case Result.Success(response) =>
+      //     val nettyResponse = convertResponse(response, nettyRequest.protocolVersion(), keepAlive)
+      //     val future = ctx.writeAndFlush(nettyResponse)
+      //     if !keepAlive then future.addListener(ChannelFutureListener.CLOSE)
+      //
+      //   case Result.Failure(error) =>
+      //     val errorResponse = errorToResponse(error, nettyRequest.protocolVersion(), keepAlive)
+      //     val future = ctx.writeAndFlush(errorResponse)
+      //     if !keepAlive then future.addListener(ChannelFutureListener.CLOSE)
+      // }
+
       responseEru.attempt.unsafeRunSync() match {
         case Result.Success(response) =>
           val nettyResponse = convertResponse(response, nettyRequest.protocolVersion(), keepAlive)
