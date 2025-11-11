@@ -27,8 +27,9 @@ eru-http **IS**:
 
 2. **Built from Primitives**
    - Like Eru builds on `Thread.startVirtualThread()`, not CompletableFuture
-   - We build on Netty (TCP/TLS primitives), not java.net.HttpClient
-   - Control over performance and semantics at every layer
+   - We build on blocking NIO (ServerSocketChannel/SocketChannel), not Netty
+   - Direct control over TCP/TLS without event loop complexity
+   - Blocking I/O is efficient on Virtual Threads (~10KB per thread)
 
 3. **Type Safety as Foundation**
    - Invalid states unrepresentable at compile time
@@ -72,27 +73,36 @@ eru-http **IS**:
 
 ### Layer 2: HTTP Transport (NEXT PHASE)
 
-**Goal**: High-performance HTTP client and server built on Netty with Eru effects.
+**Goal**: High-performance HTTP client and server built on blocking NIO + Virtual Threads with Eru effects.
+
+**New Architecture** (Simplified):
 
 **Client Components**:
-- `EruHttpClient` - Main client interface
-- `Connection` - HTTP connection lifecycle management
-- `ConnectionPool` - Connection pooling with Eru Ref/Queue
-- `RequestExecutor` - Request encoding and execution
-- `ResponseDecoder` - Response decoding with backpressure
+- `NativeHttpClient` - Main client interface (~200 lines vs 402 with Netty)
+- `HttpRequestParser` - Parse HTTP responses from SocketChannel
+- `HttpWriter` - Write HTTP requests to SocketChannel
+- `ConnectionPool` - Connection pooling with Eru Ref (structured concurrency)
 
 **Server Components**:
-- `EruHttpServer` - Main server interface
-- `Router` - Path-based routing with typed extractors
-- `Handler[A, B]` - Request handler composition
+- `NativeHttpServer` - Main server interface (~150 lines vs 332 with Netty)
+- `HttpRequestParser` - Parse HTTP requests from SocketChannel
+- `HttpWriter` - Write HTTP responses to SocketChannel
+- `Router` - Path-based routing with typed extractors (future)
 - `Middleware` - Request/response transformation
-- `ServerRuntime` - Server lifecycle and resource management
 
-**Transport Layer**:
-- Built on Netty for TCP/TLS primitives
-- Direct integration with Eru's virtual threads
-- Connection pooling using Eru's structured concurrency
-- Streaming bodies with Eru effects and backpressure
+**Transport Layer** (Simplified):
+- Built on blocking NIO (ServerSocketChannel/SocketChannel)
+- Each connection on its own Virtual Thread via `.fork`
+- Blocking reads/writes (efficient on Virtual Threads)
+- No event loops, no callbacks
+- Connection pooling using Eru Ref with structured concurrency
+- Streaming bodies with Eru effects (future)
+
+**Benefits vs Netty**:
+- 50-70% code reduction
+- No event loop blocking anti-pattern
+- Better alignment with Eru's execution model
+- Simpler, more maintainable code
 
 **Quality Bar**:
 - All async operations use Eru effects
@@ -366,49 +376,47 @@ private def parseParameterValue(value: String): Eru[InvalidMediaType, String] = 
 }
 ```
 
-### Phase 2: HTTP Client with Netty (6-8 sessions)
+### Phase 2: HTTP Client with Blocking NIO (3-4 sessions)
 
-**Architecture**:
+**Architecture** (Simplified):
 ```
-EruHttpClient
+NativeHttpClient
     ↓
-ConnectionPool (Eru Ref/Queue for pooling)
+ConnectionPool (Eru Ref for pooling)
     ↓
-Connection (Netty channel + Eru effects)
+SocketChannel (blocking I/O)
     ↓
-Netty (TCP/TLS/HTTP codecs)
-    ↓
-Virtual Threads (via Eru runtime)
+Virtual Threads (via Eru .fork)
 ```
 
 **Components to Build**:
 
-1. **Netty Integration Layer** (2 sessions)
-   - Bootstrap Netty with Eru effects
-   - Channel lifecycle management
-   - Event loop → Eru fiber integration
+1. **HTTP Parser** (1 session)
+   - Request/Response line parsing
+   - Header parsing
+   - Body parsing (fixed-length, chunked)
+   - RFC 9110 compliant
 
-2. **HTTP/1.1 Client** (2 sessions)
-   - Request encoding (Request → Netty HttpRequest)
-   - Response decoding (Netty HttpResponse → Response)
-   - Chunked transfer encoding
-   - Connection: keep-alive
+2. **HTTP Writer** (1 session)
+   - Request/Response serialization
+   - Header formatting
+   - Body writing (with chunking)
 
-3. **Connection Pooling** (2 sessions)
+3. **Native HTTP Client** (1 session)
+   - Basic client implementation (~200 lines)
+   - Request execution (blocking I/O on VT)
+   - Error handling
+
+4. **Connection Pooling** (1 session)
    - Pool with Eru Ref for state
-   - Connection acquisition/release
-   - Max connections, timeouts, eviction
-   - Structured concurrency for lifecycle
+   - Connection acquisition/release via structured concurrency
+   - Connection validation and eviction
+   - Max connections, timeouts
 
-4. **Streaming Bodies** (1 session)
-   - Chunk streaming with backpressure
-   - Integration with Eru streams (when available)
-   - Upload/download progress
-
-5. **TLS Support** (1 session)
-   - Netty SSL handler integration
+5. **TLS Support** (Optional - can defer)
+   - SSLEngine wrapping SocketChannel
    - Certificate validation
-   - SNI support
+   - Hostname verification
 
 **Success Criteria**:
 ```scala
@@ -426,28 +434,26 @@ println(response.status)  // StatusCode.Ok
 println(response.body)    // JSON response
 ```
 
-### Phase 3: HTTP Server with Netty (4-6 sessions)
+### Phase 3: HTTP Server with Blocking NIO (2-3 sessions)
 
-**Architecture**:
+**Architecture** (Simplified):
 ```
-EruHttpServer
+NativeHttpServer
     ↓
-Router (path matching + extraction)
+ServerSocketChannel (accept loop on VT)
     ↓
-Handler[Req, Resp] (request processing)
+Handler[Req, Resp] (user's request processing)
     ↓
-Middleware (transformation pipeline)
-    ↓
-Netty (server channel + HTTP codec)
+SocketChannel per client (each on own VT)
 ```
 
 **Components to Build**:
 
-1. **Server Foundation** (2 sessions)
-   - Netty server bootstrap
-   - Request decoding
-   - Response encoding
-   - Resource cleanup
+1. **Server Foundation** (1 session)
+   - ServerSocketChannel setup (~150 lines)
+   - Accept loop (blocking on VT)
+   - Per-client handler (each on own VT via .fork)
+   - Structured concurrency for cleanup
 
 2. **Router** (1 session)
    - Path pattern matching
@@ -458,11 +464,6 @@ Netty (server channel + HTTP codec)
    - Composable middleware
    - Common middleware (logging, CORS, etc.)
    - Error handling
-
-4. **Server Lifecycle** (1 session)
-   - Graceful shutdown
-   - Connection draining
-   - Health checks
 
 **Success Criteria**:
 ```scala
@@ -529,10 +530,20 @@ server.start.unsafeRunSync()  // Blocks until shutdown
 
 ## Key Decisions
 
-### Decision 1: Use Netty for TCP/TLS
-**Rationale**: Battle-tested, what everyone uses (ZIO HTTP, http4s), gives us primitives without building from raw sockets.
+### Decision 1: Use Blocking NIO + Virtual Threads (NOT Netty)
+**Rationale**:
+- Eru's Virtual Thread backend makes blocking I/O efficient (~10KB per thread vs ~2MB for OS threads)
+- Current Netty implementation has anti-pattern: `unsafeRunSync()` blocks event loop
+- POC demonstrates 70% code reduction (from ~313 lines to ~100 lines)
+- Simpler code, better alignment with Eru's execution model
+- No event loops, no callbacks, pure Eru effects
 
-**Trade-off**: JVM-only initially, but this is acceptable. Cross-platform comes later when Eru supports it.
+**Trade-off**:
+- Need to implement HTTP parser (vs using Netty codecs)
+- TLS requires manual SSLEngine setup
+- But gains: simplicity, maintainability, performance
+
+**Previous Decision (Wrong)**: "Use Netty for TCP/TLS" - This was based on not understanding Eru's Virtual Thread backend. Netty's async model conflicts with Eru's effect system.
 
 ### Decision 2: Streaming with Eru Effects
 **Rationale**: Consistent with Eru philosophy, enables backpressure, composes with other Eru operations.
