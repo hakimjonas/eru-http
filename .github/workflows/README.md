@@ -14,12 +14,11 @@ Runs on every push and PR to ensure code quality:
 - **Steps**:
   1. Checkout code with full history
   2. Setup Java 21 with SBT caching
-  3. Attempt to checkout Eru dependency (from parent repo)
-  4. Compile project with `sbt +compile`
-  5. Run tests with `sbt +test`
-  6. Check code formatting (Linux only)
-  7. Generate coverage report (Linux only)
-  8. Upload coverage to Codecov
+  3. Compile project with `sbt compile`
+  4. Run tests with `sbt test`
+  5. Check code formatting (Linux only)
+  6. Generate coverage report (Linux only)
+  7. Upload coverage to Codecov
 
 **Additional Jobs**:
 - **Lint**: Checks code formatting and runs Scalafix
@@ -62,16 +61,18 @@ Workflows use GitHub Actions cache to speed up builds:
 - **Cache key**: Based on OS, build files, and project configuration
 - **Typical speedup**: 2-5x faster builds after first run
 
-## Eru Dependency
+## Dependencies
 
-eru-http depends on Eru, which is referenced via `ProjectRef`:
+eru-http depends on the Eru effect system, which is pulled from published releases:
 
 ```scala
-lazy val eruCore = ProjectRef(file("../eru"), "eruCoreJVM")
-lazy val eruRuntime = ProjectRef(file("../eru"), "eruRuntimeJVM")
+libraryDependencies ++= Seq(
+  "net.ghoula" %% "eru-core" % "0.1.0",
+  "net.ghoula" %% "eru-runtime" % "0.1.0"
+)
 ```
 
-The CI workflow attempts to clone Eru from GitHub. If Eru is private or unavailable, the workflow continues with `continue-on-error: true`, allowing other checks to run.
+Eru artifacts are resolved from GitHub Packages or Maven Central, so no local Eru clone is needed for builds.
 
 ## Running Workflows Locally
 
@@ -116,12 +117,6 @@ Check workflow status:
 - [Release Workflow](../../actions/workflows/release.yml)
 
 ## Troubleshooting
-
-### Eru dependency not found
-If CI fails with "Eru not found" errors:
-1. Ensure Eru is accessible (public repo or correct permissions)
-2. Check that Eru location matches `build.sbt` configuration
-3. Consider using published Eru artifacts instead of `ProjectRef`
 
 ### Cache issues
 If builds are unexpectedly slow:
