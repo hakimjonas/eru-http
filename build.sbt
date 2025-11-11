@@ -50,9 +50,6 @@ ThisBuild / Test / testOptions += Tests.Argument(TestFrameworks.MUnit, "+l")
 ThisBuild / Test / parallelExecution := false
 ThisBuild / Test / fork := true // Enable fork to use javaOptions
 
-// Resolvers
-ThisBuild / resolvers += "GitHub Packages" at "https://maven.pkg.github.com/hakimjonas/eru"
-
 // Publishing settings
 ThisBuild / publishTo := {
   val nexus = "https://oss.sonatype.org/"
@@ -80,6 +77,10 @@ lazy val root = (project in file("."))
   )
   .aggregate(coreJVM, client, server) // Skip coreJS until Eru has JS support
 
+// Reference local Eru project
+lazy val eruCore = ProjectRef(file("../eru"), "eruCoreJVM")
+lazy val eruRuntime = ProjectRef(file("../eru"), "eruRuntimeJVM")
+
 // Core module with HTTP types and standards
 // Note: JS support pending Eru JS implementation
 lazy val coreJVM = (project in file("eru-http-core/jvm"))
@@ -90,12 +91,11 @@ lazy val coreJVM = (project in file("eru-http-core/jvm"))
     Compile / unmanagedSourceDirectories += baseDirectory.value / ".." / "shared" / "src" / "main" / "scala",
     Test / unmanagedSourceDirectories += baseDirectory.value / ".." / "shared" / "src" / "test" / "scala",
     libraryDependencies ++= Seq(
-      eruCore,
-      eruRuntime,
       "net.ghoula" %% "valar-core" % "0.5.0",
       brotli4j
     )
   )
+  .dependsOn(eruCore, eruRuntime)
 
 // Future: Add coreJS when Eru supports Scala.js
 // lazy val core = crossProject(JVMPlatform, JSPlatform)...
