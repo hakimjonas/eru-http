@@ -82,7 +82,7 @@ object HttpWriter {
     * - absolute-form: absolute-URI (for proxy requests)
     */
   private def buildRequestTarget(uri: Uri): String = {
-    val path = if (uri.path.isEmpty) "/" else uri.path
+    val path = if uri.path.isEmpty then "/" else uri.path
     uri.query match {
       case Some(query) => s"$path?$query"
       case None => path
@@ -140,13 +140,11 @@ object HttpWriter {
     * This method ensures all bytes are written.
     */
   private def writeAll(socket: SocketChannel, buffer: ByteBuffer): Unit = {
-    while (buffer.hasRemaining) {
+    while buffer.hasRemaining do
       val written = socket.write(buffer)
-      if (written == 0) {
+      if written == 0 then
         // Should not happen in blocking mode, but handle defensively
         Thread.`yield`()
-      }
-    }
   }
 
   /** Write chunked body (Transfer-Encoding: chunked)
@@ -159,7 +157,7 @@ object HttpWriter {
   def writeChunkedBody(socket: SocketChannel, chunks: Iterator[Array[Byte]]): Eru[HttpError, Unit] =
     Eru.effect {
       chunks.foreach { chunk =>
-        if (chunk.nonEmpty) {
+        if chunk.nonEmpty then
           // Write chunk size in hex
           val chunkSize = Integer.toHexString(chunk.length)
           writeAll(socket, ByteBuffer.wrap((chunkSize + CRLF).getBytes(StandardCharsets.UTF_8)))
@@ -169,7 +167,6 @@ object HttpWriter {
 
           // Write trailing CRLF
           writeAll(socket, ByteBuffer.wrap(CRLF.getBytes(StandardCharsets.UTF_8)))
-        }
       }
 
       // Write last chunk (size 0) and trailing CRLF
