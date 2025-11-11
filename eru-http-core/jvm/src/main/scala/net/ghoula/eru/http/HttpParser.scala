@@ -2,6 +2,7 @@ package net.ghoula.eru.http
 
 import java.nio.ByteBuffer
 import java.nio.channels.SocketChannel
+
 import net.ghoula.eru.*
 
 /** HTTP/1.1 Parser for requests and responses.
