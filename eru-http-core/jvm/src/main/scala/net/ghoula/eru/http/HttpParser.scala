@@ -48,17 +48,18 @@ object HttpParser {
     */
   private def parseRequestLine(line: String): Eru[HttpError, (Method, Uri, HttpVersion)] = {
     val parts = line.split(SP, 3)
-    if parts.length != 3 then
+    if parts.length != 3 then {
       Eru.fail(HttpError.InvalidRequest(InvalidRequest(
         s"Invalid request line: expected 'METHOD URI VERSION', got: $line",
         "RFC 9112 Section 3"
       )))
-    else
+    } else {
       for {
         method <- Method.parse(parts(0)).mapError(HttpError.InvalidMethod.apply)
         uri <- Uri.parse(parts(1)).mapError(HttpError.InvalidUri.apply)
         version <- parseHttpVersion(parts(2))
       } yield (method, uri, version)
+    }
   }
 
   /** Parse HTTP status line: "HTTP/1.1 200 OK"
@@ -67,17 +68,18 @@ object HttpParser {
     */
   private def parseStatusLine(line: String): Eru[HttpError, (HttpVersion, StatusCode, String)] = {
     val parts = line.split(SP, 3)
-    if parts.length < 2 then
+    if parts.length < 2 then {
       Eru.fail(HttpError.InvalidResponse(InvalidResponse(
         s"Invalid status line: expected 'VERSION CODE [REASON]', got: $line",
         "RFC 9112 Section 4"
       )))
-    else
+    } else {
       for {
         version <- parseHttpVersion(parts(0))
         statusCode <- StatusCode(parts(1).toInt).mapError(HttpError.InvalidStatusCode.apply)
         reason = if parts.length == 3 then parts(2) else ""
       } yield (version, statusCode, reason)
+    }
   }
 
   /** Parse HTTP version string: "HTTP/1.1" or "HTTP/1.0"
@@ -100,23 +102,25 @@ object HttpParser {
     */
   private def readHeaders(socket: SocketChannel): Eru[HttpError, Headers] = {
     def loop(headers: Headers, bytesRead: Int): Eru[HttpError, Headers] = {
-      if bytesRead > MAX_HEADERS_SIZE then
+      if bytesRead > MAX_HEADERS_SIZE then {
         Eru.fail(HttpError.InvalidRequest(InvalidRequest(
           s"Headers too large (max $MAX_HEADERS_SIZE bytes)",
           "RFC 9112 Section 2.3"
         )))
-      else
+      } else {
         readLine(socket).flatMap { line =>
-          if line.isEmpty then
+          if line.isEmpty then {
             // Empty line marks end of headers
             Eru.succeed(headers)
-          else
+          } else {
             parseHeaderLine(line).flatMap { case (name, value) =>
               headers.add(name, value)
                 .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid header: $e", "RFC 9110 Section 5.5")))
                 .flatMap(newHeaders => loop(newHeaders, bytesRead + line.length + 2))
             }
+          }
         }
+      }
     }
 
     loop(Headers.empty, 0)
@@ -126,15 +130,16 @@ object HttpParser {
     */
   private def parseHeaderLine(line: String): Eru[HttpError, (String, String)] = {
     val colonIndex = line.indexOf(COLON)
-    if colonIndex <= 0 then
+    if colonIndex <= 0 then {
       Eru.fail(HttpError.InvalidRequest(InvalidRequest(
         s"Invalid header line (missing colon): $line",
         "RFC 9112 Section 5"
       )))
-    else
+    } else {
       val name = line.substring(0, colonIndex).trim
       val value = line.substring(colonIndex + 1).trim
       Eru.succeed((name, value))
+    }
   }
 
   /** Read message body based on Content-Length or Transfer-Encoding
@@ -156,18 +161,22 @@ object HttpParser {
           case Some(cl) =>
             Eru.effect {
               val length = cl.value.toLong
-              if length == 0 then
+              if length == 0 then {
                 Body.Empty
-              else if length > Int.MaxValue then
+              } else if length > Int.MaxValue then {
                 throw new IllegalArgumentException(s"Content-Length too large: $length")
-              else
+              } else {
                 readFixedLengthBody(socket, length.toInt)
+              }
             }.mapError {
               case e: NumberFormatException =>
                 HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: ${cl.value}", "RFC 9110 Section 8.6"))
               case e: Exception =>
                 HttpError.NetworkError(s"Error reading body: ${e.getMessage}", Some(e))
-            }.flatten
+            }.flatMap {
+              case body: Body => Eru.succeed(body)
+              case bodyEru: Eru[HttpError, Body] => bodyEru
+            }
 
           case None =>
             // No body
@@ -183,11 +192,13 @@ object HttpParser {
       val buffer = ByteBuffer.allocate(length)
       var totalRead = 0
 
-      while totalRead < length do
+      while totalRead < length do {
         val bytesRead = socket.read(buffer)
-        if bytesRead == -1 then
+        if bytesRead == -1 then {
           throw new java.io.EOFException(s"Connection closed before reading $length bytes (read $totalRead)")
+        }
         totalRead += bytesRead
+      }
 
       buffer.flip()
       val bytes = new Array[Byte](buffer.remaining())
@@ -207,12 +218,12 @@ object HttpParser {
       for {
         chunkSizeLine <- readLine(socket)
         chunkSize <- parseChunkSize(chunkSizeLine)
-        result <- if chunkSize == 0 then
+        result <- if chunkSize == 0 then {
           // Last chunk, read trailing headers (we ignore them for now)
           readLine(socket).flatMap { _ =>
             Eru.succeed(Body.Binary(Bytes.fromArray(accumulator), None))
           }
-        else
+        } else {
           for {
             chunkData <- readFixedLengthBody(socket, chunkSize)
             _ <- readLine(socket) // Read trailing CRLF after chunk data
@@ -222,6 +233,7 @@ object HttpParser {
             }
             result <- readChunks(accumulator ++ bytes)
           } yield result
+        }
       } yield result
     }
 
@@ -255,32 +267,37 @@ object HttpParser {
       var foundCR = false
       var bytesRead = 0
 
-      while bytesRead < MAX_LINE_LENGTH do
-        byteBuffer.clear()
+      while bytesRead < MAX_LINE_LENGTH do {
+        byteBuffer.clear(): Unit
         val n = socket.read(byteBuffer)
 
-        if n == -1 then
+        if n == -1 then {
           throw new java.io.EOFException("Connection closed while reading line")
+        }
 
-        if n > 0 then
-          byteBuffer.flip()
+        if n > 0 then {
+          byteBuffer.flip(): Unit
           val byte = byteBuffer.get()
           val char = byte.toChar
 
-          if foundCR && char == '\n' then
+          if foundCR && char == '\n' then {
             // Found CRLF - return line without CRLF
             return Eru.succeed(lineBuffer.toString)
-          else if foundCR then
+          } else if foundCR then {
             // CR not followed by LF - add CR to buffer
             lineBuffer.append('\r')
             foundCR = false
+          }
 
-          if char == '\r' then
+          if char == '\r' then {
             foundCR = true
-          else
+          } else {
             lineBuffer.append(char)
+          }
 
           bytesRead += 1
+        }
+      }
 
       throw new IllegalStateException(s"Line too long (max $MAX_LINE_LENGTH bytes)")
     }.mapError {
