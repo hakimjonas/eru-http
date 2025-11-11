@@ -49,26 +49,21 @@ jobs:
         if [ ! -d "eru" ]; then
           git clone https://github.com/hakimjonas/eru.git eru || echo "Eru clone failed - may be private"
         fi
-      shell: bash
       continue-on-error: true
 
     - name: Compile
-      run: sbt +compile
-      shell: bash
+      run: sbt compile
 
     - name: Run tests
-      run: sbt +test
-      shell: bash
+      run: sbt test
 
     - name: Check formatting
       if: runner.os == 'Linux'
       run: sbt scalafmtCheckAll scalafmtSbtCheck
-      shell: bash
 
     - name: Generate coverage report
       if: runner.os == 'Linux'
       run: sbt coverage test coverageReport
-      shell: bash
       continue-on-error: true
 
     - name: Upload coverage to Codecov
@@ -97,11 +92,9 @@ jobs:
 
     - name: Check formatting
       run: sbt scalafmtCheckAll scalafmtSbtCheck
-      shell: bash
 
     - name: Run scalafix
       run: sbt "scalafixAll --check"
-      shell: bash
       continue-on-error: true
 
   dependency-check:
@@ -121,10 +114,8 @@ jobs:
 
     - name: Check for dependency updates
       run: sbt dependencyUpdates
-      shell: bash
       continue-on-error: true
 
     - name: Check for vulnerabilities
       run: sbt dependencyCheck
-      shell: bash
       continue-on-error: true

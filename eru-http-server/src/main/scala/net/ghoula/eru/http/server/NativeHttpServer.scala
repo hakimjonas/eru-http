@@ -34,8 +34,12 @@ private[server] final class NativeHttpServer(
     }.mapError(e => HttpError.NetworkError(s"Failed to bind server: ${e.getMessage}", Some(e)))
 
     address <- Eru.effect {
-      val addr = serverSocket.getLocalAddress.asInstanceOf[InetSocketAddress]
-      ServerAddress(addr.getHostString, addr.getPort)
+      serverSocket.getLocalAddress match {
+        case addr: InetSocketAddress =>
+          ServerAddress(addr.getHostString, addr.getPort)
+        case other =>
+          throw new IllegalStateException(s"Unexpected address type: ${other.getClass}")
+      }
     }.mapError(e => HttpError.NetworkError(s"Failed to get address: ${e.getMessage}", Some(e)))
 
     // Start accept loop on its own Virtual Thread
