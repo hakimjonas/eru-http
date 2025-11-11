@@ -1,8 +1,15 @@
 # eru-http
 
-**Standards-compliant HTTP client and server built on Eru**
+[![CI](https://github.com/hakimjonas/eru-http/workflows/CI/badge.svg)](https://github.com/hakimjonas/eru-http/actions/workflows/ci.yml)
+[![Scala 3.7.3](https://img.shields.io/badge/scala-3.7.3-red.svg)](https://www.scala-lang.org/)
+[![Java 21](https://img.shields.io/badge/java-21-blue.svg)](https://openjdk.org/projects/jdk/21/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-eru-http is a modern, type-safe HTTP library for Scala 3 that leverages the [Eru effect system](https://github.com/ghoula/eru) for elegant, composable HTTP programming. Built on Netty for performance and standards compliance, eru-http provides zero-cost abstractions through Scala 3's inline methods and extension methods.
+**Standards-compliant HTTP client and server built on Eru with Virtual Threads**
+
+eru-http is a modern, type-safe HTTP library for Scala 3 that leverages the [Eru effect system](https://github.com/ghoula/eru) for elegant, composable HTTP programming. Built on **native blocking NIO + Virtual Threads** for simplicity and performance, eru-http provides zero-cost abstractions through Scala 3's inline methods and opaque types.
+
+> **Architecture Note**: eru-http uses blocking NIO with Eru's Virtual Thread backend, eliminating the complexity of event loops and callbacks while maintaining excellent performance. See [ARCHITECTURE-FIX.md](ARCHITECTURE-FIX.md) for details.
 
 ## Features
 
@@ -17,13 +24,14 @@ eru-http is a modern, type-safe HTTP library for Scala 3 that leverages the [Eru
 - Type-safe request/response handling
 
 ### 🌐 **HTTP Server**
-- High-performance Netty-based server
+- High-performance native NIO server (blocking + Virtual Threads)
+- Each connection on its own Virtual Thread (scalable to 100K+ connections)
 - Composable middleware with zero-cost abstractions
 - Built-in middleware: CORS, auth, logging, error handling
 - Request routing with pattern matching
-- Server-Sent Events (SSE) support
+- Server-Sent Events (SSE) support (planned)
 - Multipart form data handling (RFC 7578)
-- Configurable backlog and threading
+- Structured concurrency for automatic cleanup
 
 ### 📦 **Core HTTP Types**
 - Complete HTTP types: `Method`, `StatusCode`, `Headers`, `Uri`

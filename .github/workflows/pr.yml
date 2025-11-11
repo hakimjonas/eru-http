@@ -1,0 +1,127 @@
+name: Pull Request
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  validate:
+    name: Validate PR
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup Java 21
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+        cache: 'sbt'
+
+    - name: Checkout Eru dependency
+      run: |
+        cd ..
+        if [ ! -d "eru" ]; then
+          git clone https://github.com/hakimjonas/eru.git eru || echo "Eru clone failed - may be private"
+        fi
+      continue-on-error: true
+
+    - name: Compile
+      run: sbt compile
+
+    - name: Run tests
+      run: sbt test
+
+    - name: Check formatting
+      run: sbt scalafmtCheckAll scalafmtSbtCheck
+
+    - name: Build documentation
+      run: sbt doc
+      continue-on-error: true
+
+  size-check:
+    name: Check PR Size
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Check PR size
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const { data: files } = await github.rest.pulls.listFiles({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number
+          });
+
+          const additions = files.reduce((acc, file) => acc + file.additions, 0);
+          const deletions = files.reduce((acc, file) => acc + file.deletions, 0);
+          const changes = additions + deletions;
+
+          console.log(`PR size: ${changes} lines changed (${additions} additions, ${deletions} deletions)`);
+
+          if (changes > 1000) {
+            core.warning(`This PR is quite large (${changes} lines). Consider breaking it into smaller PRs for easier review.`);
+          }
+
+  comment:
+    name: PR Comment
+    runs-on: ubuntu-latest
+    needs: [validate]
+    if: always()
+
+    steps:
+    - name: Comment on PR
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number
+          });
+
+          const botComment = comments.find(comment =>
+            comment.user.type === 'Bot' && comment.body.includes('CI Results')
+          );
+
+          const validateJob = '${{ needs.validate.result }}';
+          const status = validateJob === 'success' ? '✅ Passed' : '❌ Failed';
+
+          const body = `## CI Results
+
+**Build Status:** ${status}
+
+- **Compilation:** ${validateJob === 'success' ? '✅' : '❌'}
+- **Tests:** ${validateJob === 'success' ? '✅' : '❌'}
+- **Formatting:** ${validateJob === 'success' ? '✅' : '❌'}
+
+${validateJob === 'success' ?
+  'All checks passed! 🎉' :
+  'Some checks failed. Please review the workflow logs for details.'}
+          `;
+
+          if (botComment) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: botComment.id,
+              body: body
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+          }
