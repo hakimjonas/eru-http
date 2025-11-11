@@ -32,6 +32,9 @@ jobs:
         java-version: ${{ matrix.java }}
         cache: 'sbt'
 
+    - name: Setup SBT
+      uses: sbt/setup-sbt@v1
+
     - name: Cache SBT
       uses: actions/cache@v4
       with:
@@ -90,6 +93,9 @@ jobs:
         java-version: '21'
         cache: 'sbt'
 
+    - name: Setup SBT
+      uses: sbt/setup-sbt@v1
+
     - name: Check formatting
       run: sbt scalafmtCheckAll scalafmtSbtCheck
 
@@ -111,6 +117,9 @@ jobs:
         distribution: 'temurin'
         java-version: '21'
         cache: 'sbt'
+
+    - name: Setup SBT
+      uses: sbt/setup-sbt@v1
 
     - name: Check for dependency updates
       run: sbt dependencyUpdates

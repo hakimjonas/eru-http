@@ -29,6 +29,9 @@ jobs:
         java-version: '21'
         cache: 'sbt'
 
+    - name: Setup SBT
+      uses: sbt/setup-sbt@v1
+
     - name: Checkout Eru dependency
       run: |
         cd ..
@@ -62,6 +65,9 @@ jobs:
         distribution: 'temurin'
         java-version: '21'
         cache: 'sbt'
+
+    - name: Setup SBT
+      uses: sbt/setup-sbt@v1
 
     - name: Extract version from tag
       id: version
@@ -115,6 +121,9 @@ jobs:
         distribution: 'temurin'
         java-version: '21'
         cache: 'sbt'
+
+    - name: Setup SBT
+      uses: sbt/setup-sbt@v1
 
     - name: Run benchmarks
       run: sbt "bench/jmh:run -i 3 -wi 3 -f1 -t1"
