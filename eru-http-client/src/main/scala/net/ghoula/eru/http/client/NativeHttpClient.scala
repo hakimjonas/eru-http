@@ -6,6 +6,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import javax.net.ssl.{SSLContext, SSLEngine}
 
 import net.ghoula.eru.*
+import net.ghoula.eru.prelude.*
 import net.ghoula.eru.http.*
 
 /** Native HTTP client implementation using blocking NIO + Virtual Threads.
@@ -95,7 +96,7 @@ private[client] final class NativeHttpClient(
 
       // Handle redirects
       result <-
-        if (config.followRedirects && response.status.isRedirection && redirectCount < config.maxRedirects) {
+        if config.followRedirects && response.status.isRedirection && redirectCount < config.maxRedirects then {
           handleRedirect(request, response, redirectCount)
         } else {
           Eru.succeed(response)
@@ -120,7 +121,7 @@ private[client] final class NativeHttpClient(
       socket <- connect(host, port)
 
       // Wrap with TLS if needed
-      secureSocket <- if (request.uri.scheme.contains("https")) {
+      secureSocket <- if request.uri.scheme.contains("https") then {
         sslContext match {
           case Some(ctx) => wrapWithTLS(socket, host, port, ctx)
           case None => Eru.fail(HttpError.NetworkError("HTTPS requested but no SSL context configured", None))
@@ -133,7 +134,7 @@ private[client] final class NativeHttpClient(
       requestWithCookies <- config.cookieJar match {
         case Some(jar) =>
           jar.getCookies(request.uri).flatMap { cookies =>
-            if (cookies.nonEmpty) {
+            if cookies.nonEmpty then {
               val cookieHeader = cookies.map(_.toCookieHeader).mkString("; ")
               request.headers.add(HeaderNames.Cookie, cookieHeader)
                 .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid cookie: $e", "RFC 6265")))
@@ -168,8 +169,8 @@ private[client] final class NativeHttpClient(
 
     } yield responseBytes
 
-    // Ensure socket is closed
-    requestEffect.ensuring(Eru.unit)  // TODO: Track socket for cleanup
+    // TODO: Properly track and close socket
+    requestEffect
   }
 
   /** Connect to server (blocking)
@@ -288,7 +289,7 @@ private[client] object NativeHttpClient {
     */
   def create(config: HttpClientConfig)(using runtime: EruRuntime): Eru[HttpError, NativeHttpClient] =
     for {
-      sslContext <- if (config.tlsConfig.enabled) {
+      sslContext <- if config.tlsConfig.enabled then {
         createSSLContext(config.tlsConfig).map(Some(_))
       } else {
         Eru.succeed(None)
@@ -297,7 +298,7 @@ private[client] object NativeHttpClient {
 
   /** Create SSL context from TLS configuration
     */
-  private def createSSLContext(tlsConfig: TlsClientConfig): Eru[HttpError, SSLContext] =
+  private def createSSLContext(tlsConfig: TlsConfig): Eru[HttpError, SSLContext] =
     Eru.effect {
       // TODO: Implement proper SSL context creation
       // For now, return default context

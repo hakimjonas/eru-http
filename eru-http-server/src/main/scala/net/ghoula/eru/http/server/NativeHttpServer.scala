@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.{SSLContext, SSLEngine}
 
 import net.ghoula.eru.*
+import net.ghoula.eru.prelude.*
 import net.ghoula.eru.http.*
 
 /** Native HTTP server implementation using blocking NIO + Virtual Threads.
@@ -54,7 +55,7 @@ private[server] final class NativeHttpServer(
     */
   private def acceptLoop: Eru[HttpError, Unit] =
     Eru.effect {
-      while (running.get()) {
+      while running.get() do {
         try {
           // This blocks waiting for a connection - on Virtual Thread, it's efficient!
           val clientSocket = serverSocket.accept()
@@ -64,10 +65,10 @@ private[server] final class NativeHttpServer(
           // Structured concurrency ensures cleanup when parent scope exits
           handleClient(clientSocket).fork.unsafeRunSync()
         } catch {
-          case e: java.nio.channels.AsynchronousCloseException =>
+          case _: java.nio.channels.AsynchronousCloseException =>
             // Server socket was closed, exit loop
             ()
-          case e: Exception if !running.get() =>
+          case _: Exception if !running.get() =>
             // Server is shutting down, ignore errors
             ()
         }
@@ -107,9 +108,9 @@ private[server] final class NativeHttpServer(
     } yield ()
 
     // Ensure socket is closed even if errors occur
-    clientEffect.ensuring(
-      Eru.effect { socket.close() }.attempt.map(_ => ())
-    ).attempt.flatMap {
+    val cleanup = Eru.effect { socket.close() }.attempt.map(_ => ())
+
+    clientEffect.guarantee(cleanup).attempt.flatMap {
       case Result.Success(_) =>
         Eru.unit
       case Result.Failure(Left(httpError)) =>
@@ -153,33 +154,33 @@ private[server] final class NativeHttpServer(
   private def errorToResponse(error: HttpError): Response[Body] = {
     val (status, message) = error match {
       case HttpError.InvalidMethod(_) =>
-        (StatusCode.BadRequest.unsafeRunSync(), "Bad Request: Invalid HTTP method")
+        (StatusCode.BadRequest, "Bad Request: Invalid HTTP method")
       case HttpError.InvalidUri(_) =>
-        (StatusCode.BadRequest.unsafeRunSync(), "Bad Request: Invalid URI")
+        (StatusCode.BadRequest, "Bad Request: Invalid URI")
       case HttpError.InvalidRequest(_) =>
-        (StatusCode.BadRequest.unsafeRunSync(), "Bad Request")
+        (StatusCode.BadRequest, "Bad Request")
       case HttpError.InvalidResponse(_) =>
-        (StatusCode.InternalServerError.unsafeRunSync(), "Internal Server Error")
+        (StatusCode.InternalServerError, "Internal Server Error")
       case HttpError.TimeoutError(_) =>
-        (StatusCode.RequestTimeout.unsafeRunSync(), "Request Timeout")
+        (StatusCode.RequestTimeout, "Request Timeout")
       case _ =>
-        (StatusCode.InternalServerError.unsafeRunSync(), "Internal Server Error")
+        (StatusCode.InternalServerError, "Internal Server Error")
     }
 
-    val body = Body.Text(message, None, Charset.UTF_8)
+    val body = Body.Text(message, None, Charset.UTF8)
     val contentType = "text/plain; charset=utf-8"
 
     Response(
       status = status,
       headers = Headers.empty
-        .add(HeaderNames.ContentType, contentType).unsafeRunSync()
-        .add(HeaderNames.ContentLength, message.getBytes.length.toString).unsafeRunSync(),
+        .add(HeaderNames.ContentType, contentType).fold(_ => Headers.empty, identity)
+        .add(HeaderNames.ContentLength, message.getBytes.length.toString).fold(_ => Headers.empty, identity),
       body = body
     )
   }
 
   def shutdown: Eru[HttpError, Unit] = {
-    if (running.compareAndSet(true, false)) {
+    if running.compareAndSet(true, false) then {
       Eru.effect {
         serverSocket.close()
         ()
