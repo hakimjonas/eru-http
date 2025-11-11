@@ -260,13 +260,12 @@ object HttpParser {
     */
   private def readLine(socket: SocketChannel): Eru[HttpError, String] =
     Eru.effect {
-      val lineBuffer = new StringBuilder
-      val byteBuffer = ByteBuffer.allocate(1)
-      var foundCR = false
-      var bytesRead = 0
-      var result: Option[String] = None
+      def loop(lineBuffer: StringBuilder, foundCR: Boolean, bytesRead: Int): String = {
+        if bytesRead >= MAX_LINE_LENGTH then {
+          throw new IllegalStateException(s"Line too long (max $MAX_LINE_LENGTH bytes)")
+        }
 
-      while bytesRead < MAX_LINE_LENGTH && result.isEmpty do {
+        val byteBuffer = ByteBuffer.allocate(1)
         byteBuffer.clear(): Unit
         val n = socket.read(byteBuffer)
 
@@ -281,24 +280,28 @@ object HttpParser {
 
           if foundCR && char == '\n' then {
             // Found CRLF - return line without CRLF
-            result = Some(lineBuffer.toString)
+            lineBuffer.toString
           } else if foundCR then {
-            // CR not followed by LF - add CR to buffer
+            // CR not followed by LF - add CR to buffer and continue
             lineBuffer.append('\r')
-            foundCR = false
-          }
-
-          if char == '\r' then {
-            foundCR = true
+            if char == '\r' then {
+              loop(lineBuffer, true, bytesRead + 1)
+            } else {
+              lineBuffer.append(char)
+              loop(lineBuffer, false, bytesRead + 1)
+            }
+          } else if char == '\r' then {
+            loop(lineBuffer, true, bytesRead + 1)
           } else {
             lineBuffer.append(char)
+            loop(lineBuffer, false, bytesRead + 1)
           }
-
-          bytesRead += 1
+        } else {
+          loop(lineBuffer, foundCR, bytesRead)
         }
       }
 
-      result.getOrElse(throw new IllegalStateException(s"Line too long (max $MAX_LINE_LENGTH bytes)"))
+      loop(new StringBuilder, false, 0)
     }.mapError {
       case e: java.io.EOFException =>
         HttpError.NetworkError(s"Connection closed: ${e.getMessage}", Some(e))
