@@ -64,7 +64,7 @@ object HttpServer {
     config: HttpServerConfig,
     handler: RequestHandler
   )(using runtime: EruRuntime): Eru[HttpError, HttpServer] = {
-    NettyHttpServer.create(config, handler)
+    NativeHttpServer.create(config, handler)
   }
 
   /** Creates a server using default configuration.

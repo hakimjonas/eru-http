@@ -83,7 +83,7 @@ object HttpClient {
     * @return
     *   An Eru effect containing the created client or an error
     */
-  def create: Eru[HttpError, HttpClient] =
+  def create(using runtime: EruRuntime): Eru[HttpError, HttpClient] =
     create(HttpClientConfig.default)
 
   /** Creates a new HTTP client with the specified configuration.
@@ -93,8 +93,8 @@ object HttpClient {
     * @return
     *   An Eru effect containing the created client or an error
     */
-  def create(config: HttpClientConfig): Eru[HttpError, HttpClient] =
-    NettyHttpClient.create(config)
+  def create(config: HttpClientConfig)(using runtime: EruRuntime): Eru[HttpError, HttpClient] =
+    NativeHttpClient.create(config)
 
   /** Executes a request using a scoped client that is automatically cleaned up.
     *
@@ -107,7 +107,7 @@ object HttpClient {
     * @return
     *   An Eru effect containing the result or an error
     */
-  def scoped[A](use: HttpClient => Eru[HttpError, A]): Eru[HttpError, A] =
+  def scoped[A](use: HttpClient => Eru[HttpError, A])(using runtime: EruRuntime): Eru[HttpError, A] =
     scoped(HttpClientConfig.default)(use)
 
   /** Executes a request using a scoped client with custom configuration.
@@ -121,7 +121,7 @@ object HttpClient {
     * @return
     *   An Eru effect containing the result or an error
     */
-  def scoped[A](config: HttpClientConfig)(use: HttpClient => Eru[HttpError, A]): Eru[HttpError, A] =
+  def scoped[A](config: HttpClientConfig)(use: HttpClient => Eru[HttpError, A])(using runtime: EruRuntime): Eru[HttpError, A] =
     for {
       client <- create(config)
       result <- use(client)
