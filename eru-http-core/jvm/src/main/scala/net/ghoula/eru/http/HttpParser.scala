@@ -2,7 +2,6 @@ package net.ghoula.eru.http
 
 import java.nio.ByteBuffer
 import java.nio.channels.SocketChannel
-import java.nio.charset.StandardCharsets
 import net.ghoula.eru.*
 
 /** HTTP/1.1 Parser for requests and responses.
@@ -12,7 +11,6 @@ import net.ghoula.eru.*
   */
 object HttpParser {
 
-  private val CRLF = "\r\n"
   private val SP = " "
   private val COLON = ":"
   private val MAX_LINE_LENGTH = 8192
@@ -37,7 +35,7 @@ object HttpParser {
     */
   def parseResponse(socket: SocketChannel): Eru[HttpError, Response[Body]] = for {
     statusLine <- readLine(socket)
-    (version, status, reason) <- parseStatusLine(statusLine)
+    (version, status, _) <- parseStatusLine(statusLine)
     headers <- readHeaders(socket)
     body <- readBody(socket, headers)
   } yield Response(status, headers, body, version)
@@ -169,7 +167,7 @@ object HttpParser {
                 readFixedLengthBody(socket, length.toInt)
               }
             }.mapError {
-              case e: NumberFormatException =>
+              case _: NumberFormatException =>
                 HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: ${cl.value}", "RFC 9110 Section 8.6"))
               case e: Exception =>
                 HttpError.NetworkError(s"Error reading body: ${e.getMessage}", Some(e))
@@ -247,7 +245,7 @@ object HttpParser {
     val sizeStr = line.split(";", 2)(0).trim
     Eru.effect {
       Integer.parseInt(sizeStr, 16)
-    }.mapError { case e: NumberFormatException =>
+    }.mapError { case _: NumberFormatException =>
       HttpError.InvalidRequest(InvalidRequest(
         s"Invalid chunk size: $sizeStr",
         "RFC 9112 Section 7.1"
@@ -266,8 +264,9 @@ object HttpParser {
       val byteBuffer = ByteBuffer.allocate(1)
       var foundCR = false
       var bytesRead = 0
+      var result: Option[String] = None
 
-      while bytesRead < MAX_LINE_LENGTH do {
+      while bytesRead < MAX_LINE_LENGTH && result.isEmpty do {
         byteBuffer.clear(): Unit
         val n = socket.read(byteBuffer)
 
@@ -282,7 +281,7 @@ object HttpParser {
 
           if foundCR && char == '\n' then {
             // Found CRLF - return line without CRLF
-            return Eru.succeed(lineBuffer.toString)
+            result = Some(lineBuffer.toString)
           } else if foundCR then {
             // CR not followed by LF - add CR to buffer
             lineBuffer.append('\r')
@@ -299,7 +298,7 @@ object HttpParser {
         }
       }
 
-      throw new IllegalStateException(s"Line too long (max $MAX_LINE_LENGTH bytes)")
+      result.getOrElse(throw new IllegalStateException(s"Line too long (max $MAX_LINE_LENGTH bytes)"))
     }.mapError {
       case e: java.io.EOFException =>
         HttpError.NetworkError(s"Connection closed: ${e.getMessage}", Some(e))
