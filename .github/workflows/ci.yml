@@ -50,9 +50,20 @@ jobs:
       run: |
         cd ..
         if [ ! -d "eru" ]; then
-          git clone https://github.com/hakimjonas/eru.git eru || echo "Eru clone failed - may be private"
+          echo "Attempting to clone Eru from GitHub..."
+          git clone https://github.com/hakimjonas/eru.git eru || {
+            echo "ERROR: Failed to clone Eru dependency"
+            echo "Eru is required as ProjectRef in build.sbt: file(\"../eru\")"
+            echo "Either:"
+            echo "  1. Make the eru repo public at https://github.com/hakimjonas/eru"
+            echo "  2. Configure GitHub Actions with deploy key for private access"
+            echo "  3. Publish Eru to Maven and use library dependency instead"
+            exit 1
+          }
+        else
+          echo "Eru directory already exists"
         fi
-      continue-on-error: true
+        ls -la eru/ | head -10
 
     - name: Compile
       run: sbt compile
