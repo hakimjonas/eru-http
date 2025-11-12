@@ -107,7 +107,7 @@ lazy val client = (project in file("eru-http-client"))
     name := "eru-http-client",
     description := "Standards-compliant HTTP client built on Eru"
   )
-  .dependsOn(coreJVM)
+  .dependsOn(coreJVM, server % "test->compile")
 
 // HTTP Server (JVM-only for now - Native blocking NIO + Virtual Threads)
 lazy val server = (project in file("eru-http-server"))

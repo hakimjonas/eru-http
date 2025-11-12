@@ -140,13 +140,13 @@ object TestHttpServer {
         bodyContent <- req.body match {
           case Body.Empty => Eru.succeed("")
           case Body.Text(text, _, _) => Eru.succeed(text)
-          case Body.Binary(bytes, _) => Eru.succeed(new String(bytes, "UTF-8"))
+          case Body.Binary(value, _) => Eru.succeed(value.asString(Charset.UTF8))
           case Body.Stream(_, _, _) => Eru.succeed("") // Simplified for tests
         }
 
         // Build headers map for JSON
-        headersJson = req.headers.entries.map { entry =>
-          s""""${entry.name.value.toLowerCase}":"${entry.value.value}""""
+        headersJson = req.headers.toList.map { case (name, value) =>
+          s""""${name.toLowerCase}":"$value""""
         }.mkString(",")
 
         // Escape quotes in body content

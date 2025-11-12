@@ -1,6 +1,5 @@
 package net.ghoula.eru.http.client
 
-import io.netty.handler.codec.http.HttpResponseStatus
 import munit.FunSuite
 
 import scala.concurrent.duration.*
@@ -230,7 +229,7 @@ class HttpClientSpec extends FunSuite {
   }
 
   test("HttpClient - empty response body") {
-    val server = TestHttpServer.simple(status = HttpResponseStatus.NO_CONTENT, body = "")
+    val server = TestHttpServer.simple(status = StatusCode.NoContent, body = "")
     try {
       HttpClient
         .scoped(HttpClientConfig.default) { client =>
@@ -253,7 +252,7 @@ class HttpClientSpec extends FunSuite {
 
   test("HttpClient - handles 404 Not Found") {
     val server = TestHttpServer.simple(
-      status = HttpResponseStatus.NOT_FOUND,
+      status = StatusCode.NotFound,
       body = "Not found"
     )
     try {
@@ -276,7 +275,7 @@ class HttpClientSpec extends FunSuite {
 
   test("HttpClient - handles 500 Internal Server Error") {
     val server = TestHttpServer.simple(
-      status = HttpResponseStatus.INTERNAL_SERVER_ERROR,
+      status = StatusCode.InternalServerError,
       body = "Server error"
     )
     try {
