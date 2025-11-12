@@ -4,7 +4,7 @@ import java.net.InetSocketAddress
 import java.nio.channels.{ServerSocketChannel, SocketChannel}
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeoutException
-import javax.net.ssl.{SSLContext, SSLEngine}
+import javax.net.ssl.SSLContext
 
 import net.ghoula.eru.*
 import net.ghoula.eru.prelude.*
@@ -119,7 +119,7 @@ private[server] final class NativeHttpServer(
         Eru.unit
       case Result.Failure(error) =>
         error match {
-          case Left(httpError: HttpError) =>
+          case httpError: HttpError =>
             // Log error and send error response if possible
             Eru.effect {
               try {
@@ -129,7 +129,7 @@ private[server] final class NativeHttpServer(
                 case _: Exception => () // Best effort
               }
             }.mapError(e => HttpError.NetworkError(s"Error handling failed: ${e.getMessage}", Some(e)))
-          case Right(throwable: Throwable) =>
+          case throwable: Throwable =>
             Eru.effect {
               System.err.println(s"Unexpected error handling client: ${throwable.getMessage}")
               throwable.printStackTrace()
