@@ -117,20 +117,23 @@ private[server] final class NativeHttpServer(
     } yield result).flatMap {
       case Result.Success(_) =>
         Eru.unit
-      case Result.Failure(Left(httpError)) =>
-        // Log error and send error response if possible
-        Eru.effect {
-          try {
-            val errorResponse = errorToResponse(httpError)
-            HttpWriter.writeResponse(socket, errorResponse).unsafeRunSync()
-          } catch {
-            case _: Exception => () // Best effort
-          }
-        }
-      case Result.Failure(Right(throwable)) =>
-        Eru.effect {
-          System.err.println(s"Unexpected error handling client: ${throwable.getMessage}")
-          throwable.printStackTrace()
+      case Result.Failure(error) =>
+        error match {
+          case Left(httpError: HttpError) =>
+            // Log error and send error response if possible
+            Eru.effect {
+              try {
+                val errorResponse = errorToResponse(httpError)
+                HttpWriter.writeResponse(socket, errorResponse).unsafeRunSync()
+              } catch {
+                case _: Exception => () // Best effort
+              }
+            }
+          case Right(throwable: Throwable) =>
+            Eru.effect {
+              System.err.println(s"Unexpected error handling client: ${throwable.getMessage}")
+              throwable.printStackTrace()
+            }
         }
     }
   }
