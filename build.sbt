@@ -100,31 +100,21 @@ lazy val coreJVM = (project in file("eru-http-core/jvm"))
 // Future: Add coreJS when Eru supports Scala.js
 // lazy val core = crossProject(JVMPlatform, JSPlatform)...
 
-// HTTP Client (JVM-only for now - Netty-based)
+// HTTP Client (JVM-only for now - Native blocking NIO + Virtual Threads)
 lazy val client = (project in file("eru-http-client"))
   .settings(commonSettings)
   .settings(
     name := "eru-http-client",
-    description := "Standards-compliant HTTP client built on Eru",
-    libraryDependencies ++= Seq(
-      nettyHandler,
-      nettyCodecHttp,
-      nettyCodecHttp2
-    )
+    description := "Standards-compliant HTTP client built on Eru"
   )
   .dependsOn(coreJVM)
 
-// HTTP Server (JVM-only for now - Netty-based)
+// HTTP Server (JVM-only for now - Native blocking NIO + Virtual Threads)
 lazy val server = (project in file("eru-http-server"))
   .settings(commonSettings)
   .settings(
     name := "eru-http-server",
-    description := "Standards-compliant HTTP server built on Eru",
-    libraryDependencies ++= Seq(
-      nettyHandler,
-      nettyCodecHttp,
-      nettyCodecHttp2
-    )
+    description := "Standards-compliant HTTP server built on Eru"
   )
   .dependsOn(coreJVM)
 
