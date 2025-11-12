@@ -546,7 +546,7 @@ class MiddlewareSpec extends FunSuite {
 
     // Apply auth first, then CORS - this way CORS headers are added to all responses
     val app = Middleware
-      .auth(checkAuth)
+      .auth(checkAuth, Middleware.defaultUnauthorized())
       .andThen(Middleware.cors())
       .apply(handler)
 
