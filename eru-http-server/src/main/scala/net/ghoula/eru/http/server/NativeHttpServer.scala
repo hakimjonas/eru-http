@@ -142,8 +142,8 @@ private[server] final class NativeHttpServer(
 
         // Convert handler result to response (either success or error response)
         response = handlerResult match {
-          case Result.Success(resp) => addConnectionHeader(resp)
-          case Result.Failure(httpError: HttpError) => addConnectionHeader(errorToResponse(httpError))
+          case Result.Success(resp) => addConnectionHeader(request, resp)
+          case Result.Failure(httpError: HttpError) => addConnectionHeader(request, errorToResponse(httpError))
         }
 
         // Write response (blocking write - efficient on VT!)
@@ -189,8 +189,10 @@ private[server] final class NativeHttpServer(
     *
     * HTTP/1.1 requires either Content-Length or Connection: close for message framing.
     * This ensures we send proper headers for keep-alive support.
+    *
+    * If the client requests Connection: close, we echo it back in the response.
     */
-  private def addConnectionHeader(response: Response[Body]): Response[Body] = {
+  private def addConnectionHeader(request: Request[Body], response: Response[Body]): Response[Body] = {
     // First, ensure Content-Length is set if there's a body
     val withContentLength = if response.headers.contains(HeaderNames.ContentLength) then {
       response
@@ -213,11 +215,15 @@ private[server] final class NativeHttpServer(
       }
     }
 
-    // Then add Connection: keep-alive if not present
+    // Then add Connection header if not present
     if withContentLength.headers.contains(HeaderNames.Connection) then {
       withContentLength
     } else {
-      withContentLength.headers.add(HeaderNames.Connection, "keep-alive").attempt.unsafeRunSync() match {
+      // Check if client requested Connection: close
+      val requestConnection = request.headers.getFirst(HeaderNames.Connection).map(_.value.toLowerCase)
+      val connectionValue = if requestConnection.contains("close") then "close" else "keep-alive"
+
+      withContentLength.headers.add(HeaderNames.Connection, connectionValue).attempt.unsafeRunSync() match {
         case Result.Success(newHeaders) => withContentLength.copy(headers = newHeaders)
         case Result.Failure(_) => withContentLength
       }
