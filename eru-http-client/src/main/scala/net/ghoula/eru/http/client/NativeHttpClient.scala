@@ -219,17 +219,20 @@ private[client] final class NativeHttpClient(
 
     connectEffect
       .attempt
-      .timeout(java.time.Duration.ofMillis(config.connectTimeout.toMillis))
       .flatMap {
         case Result.Success(socket) => Eru.succeed(socket)
-        case Result.Failure(e) => e match {
-          case _: TimeoutException =>
-            Eru.fail(HttpError.ConnectionError(s"Connection timeout after ${config.connectTimeout}", None))
-          case _: java.net.ConnectException =>
-            Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
-          case _ =>
-            Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
-        }
+        case Result.Failure(e: java.net.ConnectException) =>
+          Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
+        case Result.Failure(e) =>
+          Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
+      }
+      .timeout(java.time.Duration.ofMillis(config.connectTimeout.toMillis))
+      .mapError {
+        case _: TimeoutException =>
+          HttpError.ConnectionError(s"Connection timeout after ${config.connectTimeout}", None)
+        case e: HttpError => e
+        case e: Throwable =>
+          HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e))
       }
   }
 
