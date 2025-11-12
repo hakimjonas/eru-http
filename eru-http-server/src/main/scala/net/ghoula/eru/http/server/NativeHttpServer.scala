@@ -111,8 +111,15 @@ private[server] final class NativeHttpServer(
   private def handleRequestLoop(socket: SocketChannel): Eru[HttpError, Unit] = {
     def loop(): Eru[HttpError, Boolean] = {
       val requestEffect = for {
-        // Parse request (blocking read - efficient on VT!)
-        requestResult <- HttpParser.parseRequest(socket).attempt
+        // Parse request with timeout (blocking read - efficient on VT!)
+        // If no request arrives within idle timeout, exit the loop
+        requestResult <- HttpParser.parseRequest(socket)
+          .timeout(java.time.Duration.ofMillis(config.idleTimeout.toMillis))
+          .mapError {
+            case _: TimeoutException => HttpError.NetworkError("Keep-alive timeout", None)
+            case e: Throwable => HttpError.NetworkError(s"Parse error: ${e.getMessage}", Some(e))
+          }
+          .attempt
 
         // If parsing fails (socket closed, timeout, etc.), exit loop
         request <- requestResult match {
