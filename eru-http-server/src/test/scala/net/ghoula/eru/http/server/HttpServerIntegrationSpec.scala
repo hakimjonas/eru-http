@@ -322,7 +322,7 @@ class HttpServerIntegrationSpec extends FunSuite {
           if line.contains("Content-Length:") then {
             contentLength = line.split(":")(1).trim.toInt
           }
-          response.append(line).append("\n")
+          response.append(line).append("\n"): Unit
         case _ =>
           continue = false
       }
