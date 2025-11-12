@@ -441,10 +441,7 @@ class InterceptorSpec extends FunSuite {
     val server = TestHttpServer.create(
       handler = (_, path) =>
         if path.contains("/error") then
-          TestHttpServer.ResponseConfig(
-            status = io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERROR,
-            body = "Error"
-          )
+          TestHttpServer.ResponseConfig(status = StatusCode.InternalServerError, body = "Error")
         else TestHttpServer.ResponseConfig(body = "OK")
     )
 

@@ -61,6 +61,30 @@ ThisBuild / publishTo := {
 
 ThisBuild / Test / publishArtifact := false
 
+// GitHub Packages resolver for Eru dependencies (CI only)
+ThisBuild / resolvers ++= {
+  if (sys.env.contains("GITHUB_TOKEN") && sys.env("GITHUB_TOKEN").nonEmpty) {
+    Seq("GitHub Package Registry (hakimjonas/eru)" at "https://maven.pkg.github.com/hakimjonas/eru")
+  } else {
+    Seq.empty
+  }
+}
+
+ThisBuild / credentials ++= {
+  if (sys.env.contains("GITHUB_TOKEN") && sys.env("GITHUB_TOKEN").nonEmpty) {
+    Seq(
+      Credentials(
+        "GitHub Package Registry",
+        "maven.pkg.github.com",
+        sys.env.getOrElse("GITHUB_ACTOR", "hakimjonas"),
+        sys.env("GITHUB_TOKEN")
+      )
+    )
+  } else {
+    Seq.empty
+  }
+}
+
 // Shared settings
 lazy val commonSettings = Seq(
   libraryDependencies ++= Seq(
@@ -68,6 +92,12 @@ lazy val commonSettings = Seq(
   ),
   testFrameworks += new TestFramework("munit.Framework")
 )
+
+// Eru dependency version (for CI)
+val eruVersion = "0.0.0+336-30cc42da"
+
+// Check if we're in CI (GITHUB_TOKEN is set) or local development
+val useLocalEru = !sys.env.contains("GITHUB_TOKEN") || sys.env("GITHUB_TOKEN").isEmpty
 
 // Root project
 lazy val root = (project in file("."))
@@ -77,9 +107,9 @@ lazy val root = (project in file("."))
   )
   .aggregate(coreJVM, client, server) // Skip coreJS until Eru has JS support
 
-// Reference local Eru project
-lazy val eruCore = ProjectRef(file("../eru"), "eruCoreJVM")
-lazy val eruRuntime = ProjectRef(file("../eru"), "eruRuntimeJVM")
+// Local Eru project references (only when not in CI)
+lazy val eruCoreRef = if (useLocalEru) Some(ProjectRef(file("../eru"), "eruCoreJVM")) else None
+lazy val eruRuntimeRef = if (useLocalEru) Some(ProjectRef(file("../eru"), "eruRuntimeJVM")) else None
 
 // Core module with HTTP types and standards
 // Note: JS support pending Eru JS implementation
@@ -90,41 +120,49 @@ lazy val coreJVM = (project in file("eru-http-core/jvm"))
     description := "Core HTTP types and standards for Eru-based applications",
     Compile / unmanagedSourceDirectories += baseDirectory.value / ".." / "shared" / "src" / "main" / "scala",
     Test / unmanagedSourceDirectories += baseDirectory.value / ".." / "shared" / "src" / "test" / "scala",
-    libraryDependencies ++= Seq(
-      "net.ghoula" %% "valar-core" % "0.5.0",
-      brotli4j
-    )
+    libraryDependencies ++= {
+      if (useLocalEru) {
+        // Local development: no published dependencies needed, use local projects via dependsOn
+        Seq(
+          "net.ghoula" % "valar-core_3" % "0.5.0",
+          brotli4j
+        )
+      } else {
+        // CI: use published artifacts from GitHub Packages
+        Seq(
+          "net.ghoula" % "eru-core_3" % eruVersion,
+          "net.ghoula" % "eru-runtime_3" % eruVersion,
+          "net.ghoula" % "valar-core_3" % "0.5.0",
+          brotli4j
+        )
+      }
+    }
   )
-  .dependsOn(eruCore, eruRuntime)
+  .configure(p =>
+    (eruCoreRef, eruRuntimeRef) match {
+      case (Some(core), Some(runtime)) => p.dependsOn(core, runtime)
+      case _ => p
+    }
+  )
 
 // Future: Add coreJS when Eru supports Scala.js
 // lazy val core = crossProject(JVMPlatform, JSPlatform)...
 
-// HTTP Client (JVM-only for now - Netty-based)
+// HTTP Client (JVM-only for now - Native blocking NIO + Virtual Threads)
 lazy val client = (project in file("eru-http-client"))
   .settings(commonSettings)
   .settings(
     name := "eru-http-client",
-    description := "Standards-compliant HTTP client built on Eru",
-    libraryDependencies ++= Seq(
-      nettyHandler,
-      nettyCodecHttp,
-      nettyCodecHttp2
-    )
+    description := "Standards-compliant HTTP client built on Eru"
   )
-  .dependsOn(coreJVM)
+  .dependsOn(coreJVM, server % "test->compile")
 
-// HTTP Server (JVM-only for now - Netty-based)
+// HTTP Server (JVM-only for now - Native blocking NIO + Virtual Threads)
 lazy val server = (project in file("eru-http-server"))
   .settings(commonSettings)
   .settings(
     name := "eru-http-server",
-    description := "Standards-compliant HTTP server built on Eru",
-    libraryDependencies ++= Seq(
-      nettyHandler,
-      nettyCodecHttp,
-      nettyCodecHttp2
-    )
+    description := "Standards-compliant HTTP server built on Eru"
   )
   .dependsOn(coreJVM)
 

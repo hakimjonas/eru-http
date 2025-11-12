@@ -11,6 +11,9 @@ jobs:
   build:
     name: Build and Test
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: read
     strategy:
       fail-fast: false
       matrix:
@@ -48,17 +51,29 @@ jobs:
 
     - name: Compile
       run: sbt compile
+      env:
+        GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
 
     - name: Run tests
       run: sbt test
+      env:
+        GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
 
     - name: Check formatting
       if: runner.os == 'Linux'
       run: sbt scalafmtCheckAll scalafmtSbtCheck
+      env:
+        GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
 
     - name: Generate coverage report
       if: runner.os == 'Linux'
       run: sbt coverage test coverageReport
+      env:
+        GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
       continue-on-error: true
 
     - name: Upload coverage to Codecov
@@ -73,6 +88,9 @@ jobs:
   lint:
     name: Lint and Format Check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
 
     steps:
     - name: Checkout code
@@ -90,14 +108,23 @@ jobs:
 
     - name: Check formatting
       run: sbt scalafmtCheckAll scalafmtSbtCheck
+      env:
+        GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
 
     - name: Run scalafix
       run: sbt "scalafixAll --check"
+      env:
+        GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
       continue-on-error: true
 
   dependency-check:
     name: Dependency Check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
 
     steps:
     - name: Checkout code
@@ -115,8 +142,14 @@ jobs:
 
     - name: Check for dependency updates
       run: sbt dependencyUpdates
+      env:
+        GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
       continue-on-error: true
 
     - name: Check for vulnerabilities
       run: sbt dependencyCheck
+      env:
+        GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
       continue-on-error: true

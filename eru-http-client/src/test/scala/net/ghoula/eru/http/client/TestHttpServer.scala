@@ -1,32 +1,28 @@
 package net.ghoula.eru.http.client
 
-import io.netty.bootstrap.ServerBootstrap
-import io.netty.buffer.Unpooled
-import io.netty.channel.*
-import io.netty.channel.nio.NioEventLoopGroup
-import io.netty.channel.socket.SocketChannel
-import io.netty.channel.socket.nio.NioServerSocketChannel
-import io.netty.handler.codec.http.*
-import io.netty.util.CharsetUtil
-
 import java.util.concurrent.atomic.AtomicInteger
 import scala.concurrent.duration.*
 
+import net.ghoula.eru.*
+import net.ghoula.eru.http.*
+import net.ghoula.eru.http.server.{HttpServer, HttpServerConfig}
+import net.ghoula.eru.prelude.*
+
 /** Simple HTTP server for testing HTTP client.
   *
-  * Supports configurable responses, headers, delays, redirects, and error conditions.
+  * Native implementation using blocking NIO + Virtual Threads. Supports configurable responses,
+  * headers, delays, redirects, and error conditions.
   */
-final class TestHttpServer(
+final class TestHttpServer private (
   val port: Int,
-  private val bossGroup: EventLoopGroup,
-  private val workerGroup: EventLoopGroup,
-  private val channel: Channel
+  private val server: HttpServer,
+  private val runtime: EruRuntime
 ) {
 
   def shutdown(): Unit = {
-    channel.close().sync(): Unit
-    workerGroup.shutdownGracefully(): Unit
-    bossGroup.shutdownGracefully(): Unit
+    @annotation.nowarn("msg=unused")
+    given EruRuntime = runtime
+    server.shutdown.unsafeRunSync()
   }
 
   def url(path: String = "/"): String = s"http://localhost:$port$path"
@@ -34,10 +30,10 @@ final class TestHttpServer(
 
 object TestHttpServer {
 
-  /** Handler builder for configuring test responses.
+  /** Response configuration for test server.
     */
   case class ResponseConfig(
-    status: HttpResponseStatus = HttpResponseStatus.OK,
+    status: StatusCode = StatusCode.Ok,
     body: String = "",
     headers: Map[String, String] = Map.empty,
     delay: Duration = Duration.Zero,
@@ -52,205 +48,144 @@ object TestHttpServer {
     *   Port to bind to (0 for random port)
     * @param handler
     *   Function that maps (method, path) to ResponseConfig
+    * @param runtime
+    *   Implicit EruRuntime for execution
     */
   def create(
     port: Int = 0,
     handler: (String, String) => ResponseConfig = (_, _) => ResponseConfig()
-  ): TestHttpServer = {
-    val bossGroup = new NioEventLoopGroup(1)
-    val workerGroup = new NioEventLoopGroup()
+  )(using runtime: EruRuntime): TestHttpServer = {
+    val requestHandler: Request[Body] => Eru[HttpError, Response[Body]] = req => {
+      Eru.effect {
+        val fullPath = req.uri.path + req.uri.query.fold("")("?" + _)
+        val config = handler(req.method.value, fullPath)
 
-    try {
-      val bootstrap = new ServerBootstrap()
-      bootstrap
-        .group(bossGroup, workerGroup)
-        .channel(classOf[NioServerSocketChannel])
-        .childHandler(new ChannelInitializer[SocketChannel] {
-          override def initChannel(ch: SocketChannel): Unit = {
-            ch.pipeline().addLast(new HttpServerCodec())
-            ch.pipeline().addLast(new HttpObjectAggregator(1024 * 1024))
-            ch.pipeline().addLast(new TestServerHandler(handler)): Unit
-          }
-        })
+        // Apply delay if configured
+        if config.delay > Duration.Zero then {
+          Thread.sleep(config.delay.toMillis)
+        }
 
-      val channelFuture = bootstrap.bind(port).sync()
-      val actualPort = channelFuture.channel().localAddress() match {
-        case addr: java.net.InetSocketAddress => addr.getPort
-        case other => throw new IllegalStateException(s"Unexpected address type: ${other.getClass}")
-      }
+        // Handle redirect
+        config.redirectTo match {
+          case Some(location) =>
+            val redirectHeaders = Headers.empty
+              .add(HeaderNames.Location, location)
+              .unsafeRunSync()
 
-      new TestHttpServer(actualPort, bossGroup, workerGroup, channelFuture.channel())
-    } catch {
-      case e: Exception =>
-        workerGroup.shutdownGracefully(): Unit
-        bossGroup.shutdownGracefully(): Unit
-        throw e
+            Response(
+              status = StatusCode.Found,
+              headers = redirectHeaders,
+              body = Body.Empty
+            )
+
+          case None =>
+            // Build response headers
+            var responseHeaders = Headers.empty
+            config.headers.foreach { case (name, value) =>
+              responseHeaders = responseHeaders.add(name, value).unsafeRunSync()
+            }
+
+            Response(
+              status = config.status,
+              headers = responseHeaders,
+              body = Body.Text(config.body)
+            )
+        }
+      }.mapError(e => HttpError.NetworkError(s"Test handler error: ${e.getMessage}", Some(e)))
     }
+
+    val config = HttpServerConfig.localhost.withPort(port)
+
+    val startEffect = for {
+      srv <- HttpServer.create(config, requestHandler)
+      addr <- srv.start
+    } yield (srv, addr.port)
+
+    val (server, actualPort) = startEffect.unsafeRunSync()
+
+    new TestHttpServer(actualPort, server, runtime)
   }
 
   /** Creates a simple test server that returns the same response for all requests.
     */
   def simple(
     port: Int = 0,
-    status: HttpResponseStatus = HttpResponseStatus.OK,
+    status: StatusCode = StatusCode.Ok,
     body: String = "",
     headers: Map[String, String] = Map.empty
-  ): TestHttpServer = {
+  )(using runtime: EruRuntime): TestHttpServer = {
     create(port, (_, _) => ResponseConfig(status, body, headers))
   }
 
   /** Creates a test server that echoes back request information.
     */
-  def echo(port: Int = 0): TestHttpServer = {
+  def echo(port: Int = 0)(using runtime: EruRuntime): TestHttpServer = {
     create(
       port,
       (method, path) => {
-        val body = s"""{"method":"$method","path":"$path","request":"${requestCounter.incrementAndGet()}"}"""
+        val bodyJson = s"""{"method":"$method","path":"$path","request":"${requestCounter.incrementAndGet()}"}"""
         ResponseConfig(
-          status = HttpResponseStatus.OK,
-          body = body,
+          status = StatusCode.Ok,
+          body = bodyJson,
           headers = Map("Content-Type" -> "application/json")
         )
       }
     )
   }
 
-  /** Handler builder that provides access to the request.
-    */
-  type FullEchoHandler = FullHttpRequest => ResponseConfig
-
   /** Creates a test server that allows full access to the request for echoing.
     */
-  def echoWithHeaders(port: Int = 0): TestHttpServer = {
-    val bossGroup = new NioEventLoopGroup(1)
-    val workerGroup = new NioEventLoopGroup()
+  def echoWithHeaders(port: Int = 0)(using runtime: EruRuntime): TestHttpServer = {
+    val requestHandler: Request[Body] => Eru[HttpError, Response[Body]] = req => {
+      for {
+        // Read request body
+        bodyContent <- req.body match {
+          case Body.Empty => Eru.succeed("")
+          case Body.Text(text, _, _) => Eru.succeed(text)
+          case Body.Binary(value, _) => Eru.succeed(value.asString(Charset.UTF8))
+          case Body.Stream(_, _, _) => Eru.succeed("") // Simplified for tests
+        }
 
-    try {
-      val bootstrap = new ServerBootstrap()
-      bootstrap
-        .group(bossGroup, workerGroup)
-        .channel(classOf[NioServerSocketChannel])
-        .childHandler(new ChannelInitializer[SocketChannel] {
-          override def initChannel(ch: SocketChannel): Unit = {
-            ch.pipeline().addLast(new HttpServerCodec())
-            ch.pipeline().addLast(new HttpObjectAggregator(1024 * 1024))
-            ch.pipeline().addLast(new TestServerHandlerWithRequest()): Unit
+        // Build headers map for JSON
+        headersJson = req.headers.toList.map { case (name, value) =>
+          s""""${name.toLowerCase}":"$value""""
+        }.mkString(",")
+
+        // Escape quotes in body content
+        escapedBody = bodyContent.replaceAll("\"", "\\\\\"")
+
+        // Build full path with query string
+        fullPath = req.uri.path + req.uri.query.fold("")("?" + _)
+
+        // Build JSON response
+        bodyJson =
+          if bodyContent.nonEmpty then {
+            s"""{"method":"${req.method.value}","path":"$fullPath",$headersJson,"body":"$escapedBody"}"""
+          } else {
+            s"""{"method":"${req.method.value}","path":"$fullPath",$headersJson}"""
           }
-        })
 
-      val channelFuture = bootstrap.bind(port).sync()
-      val actualPort = channelFuture.channel().localAddress() match {
-        case addr: java.net.InetSocketAddress => addr.getPort
-        case other => throw new IllegalStateException(s"Unexpected address type: ${other.getClass}")
-      }
+        // Create response headers
+        responseHeaders <- Headers.empty
+          .add(HeaderNames.ContentType, "application/json")
+          .mapError(e => HttpError.NetworkError(s"Failed to add header: $e", None))
 
-      new TestHttpServer(actualPort, bossGroup, workerGroup, channelFuture.channel())
-    } catch {
-      case e: Exception =>
-        workerGroup.shutdownGracefully(): Unit
-        bossGroup.shutdownGracefully(): Unit
-        throw e
-    }
-  }
-
-  private class TestServerHandlerWithRequest() extends SimpleChannelInboundHandler[FullHttpRequest] {
-
-    override def channelRead0(ctx: ChannelHandlerContext, request: FullHttpRequest): Unit = {
-      import scala.jdk.CollectionConverters.*
-
-      val method = request.method().name()
-      val path = request.uri()
-
-      // Build JSON with headers
-      val headersMap = request
-        .headers()
-        .iteratorAsString()
-        .asScala
-        .map(entry => s""""${entry.getKey.toLowerCase}":"${entry.getValue}"""")
-        .mkString(",")
-
-      val bodyContent = if request.content().readableBytes() > 0 then {
-        val bytes = new Array[Byte](request.content().readableBytes())
-        request.content().readBytes(bytes)
-        request.content().resetReaderIndex()
-        new String(bytes, "UTF-8")
-      } else {
-        ""
-      }
-
-      val responseBody = s"""{"method":"$method","path":"$path",$headersMap${
-          if bodyContent.nonEmpty then s""","body":"${bodyContent.replaceAll("\"", "\\\\\"")}"""" else ""
-        }}"""
-
-      val content = Unpooled.copiedBuffer(responseBody, CharsetUtil.UTF_8)
-      val response = new DefaultFullHttpResponse(
-        HttpVersion.HTTP_1_1,
-        HttpResponseStatus.OK,
-        content
+      } yield Response(
+        status = StatusCode.Ok,
+        headers = responseHeaders,
+        body = Body.Text(bodyJson)
       )
-
-      response.headers().set(HttpHeaderNames.CONTENT_TYPE, "application/json")
-      response.headers().set(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes())
-
-      ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE): Unit
     }
 
-    override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
-      cause.printStackTrace()
-      ctx.close(): Unit
-    }
-  }
+    val config = HttpServerConfig.localhost.withPort(port)
 
-  private class TestServerHandler(
-    handler: (String, String) => ResponseConfig
-  ) extends SimpleChannelInboundHandler[FullHttpRequest] {
+    val startEffect = for {
+      srv <- HttpServer.create(config, requestHandler)
+      addr <- srv.start
+    } yield (srv, addr.port)
 
-    override def channelRead0(ctx: ChannelHandlerContext, request: FullHttpRequest): Unit = {
-      val method = request.method().name()
-      val path = request.uri()
+    val (server, actualPort) = startEffect.unsafeRunSync()
 
-      val config = handler(method, path)
-
-      // Apply delay if configured
-      if config.delay > Duration.Zero then {
-        Thread.sleep(config.delay.toMillis)
-      }
-
-      // Handle redirect
-      config.redirectTo match {
-        case Some(location) =>
-          val response = new DefaultFullHttpResponse(
-            HttpVersion.HTTP_1_1,
-            HttpResponseStatus.FOUND,
-            Unpooled.EMPTY_BUFFER
-          )
-          response.headers().set(HttpHeaderNames.LOCATION, location)
-          response.headers().set(HttpHeaderNames.CONTENT_LENGTH, 0)
-          ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE): Unit
-
-        case None =>
-          // Build response
-          val content = Unpooled.copiedBuffer(config.body, CharsetUtil.UTF_8)
-          val response = new DefaultFullHttpResponse(
-            HttpVersion.HTTP_1_1,
-            config.status,
-            content
-          )
-
-          // Set headers
-          response.headers().set(HttpHeaderNames.CONTENT_LENGTH, content.readableBytes())
-          config.headers.foreach { case (name, value) =>
-            response.headers().set(name, value)
-          }
-
-          // Send response
-          ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE): Unit
-      }
-    }
-
-    override def exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable): Unit = {
-      cause.printStackTrace()
-      ctx.close(): Unit
-    }
+    new TestHttpServer(actualPort, server, runtime)
   }
 }
