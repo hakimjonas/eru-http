@@ -2,7 +2,7 @@ package net.ghoula.eru.http.server
 
 import munit.FunSuite
 
-import java.io.{BufferedReader, InputStreamReader, PrintWriter}
+import java.io.{BufferedReader, InputStreamReader}
 import java.net.Socket
 import java.util.concurrent.{CountDownLatch, Executors}
 import scala.concurrent.{ExecutionContext, Future}
@@ -70,14 +70,14 @@ class HttpServerIntegrationSpec extends FunSuite {
           _ <- Eru.effect {
             // Use raw socket to verify connection reuse
             Using.resource(new Socket(address.host, address.port)) { socket =>
-              val out = new PrintWriter(socket.getOutputStream, true)
+              val out = socket.getOutputStream
               val in = new BufferedReader(new InputStreamReader(socket.getInputStream))
 
-              // First request
-              out.println("GET / HTTP/1.1")
-              out.println(s"Host: ${address.host}:${address.port}")
-              out.println("Connection: keep-alive")
-              out.println()
+              // First request with proper CRLF line endings
+              out.write(s"GET / HTTP/1.1\r\n".getBytes)
+              out.write(s"Host: ${address.host}:${address.port}\r\n".getBytes)
+              out.write("Connection: keep-alive\r\n".getBytes)
+              out.write("\r\n".getBytes)
               out.flush()
 
               // Read first response
@@ -86,10 +86,10 @@ class HttpServerIntegrationSpec extends FunSuite {
               assert(response1.toLowerCase.contains("connection: keep-alive"), s"First response should have keep-alive. Got:\n$response1")
 
               // Second request on same connection
-              out.println("GET / HTTP/1.1")
-              out.println(s"Host: ${address.host}:${address.port}")
-              out.println("Connection: keep-alive")
-              out.println()
+              out.write(s"GET / HTTP/1.1\r\n".getBytes)
+              out.write(s"Host: ${address.host}:${address.port}\r\n".getBytes)
+              out.write("Connection: keep-alive\r\n".getBytes)
+              out.write("\r\n".getBytes)
               out.flush()
 
               // Read second response - if connection was closed, this will fail
@@ -119,14 +119,14 @@ class HttpServerIntegrationSpec extends FunSuite {
           address <- server.start
           _ <- Eru.effect {
             Using.resource(new Socket(address.host, address.port)) { socket =>
-              val out = new PrintWriter(socket.getOutputStream, true)
+              val out = socket.getOutputStream
               val in = new BufferedReader(new InputStreamReader(socket.getInputStream))
 
-              // Request with Connection: close
-              out.println("GET / HTTP/1.1")
-              out.println(s"Host: ${address.host}:${address.port}")
-              out.println("Connection: close")
-              out.println()
+              // Request with Connection: close using proper CRLF line endings
+              out.write(s"GET / HTTP/1.1\r\n".getBytes)
+              out.write(s"Host: ${address.host}:${address.port}\r\n".getBytes)
+              out.write("Connection: close\r\n".getBytes)
+              out.write("\r\n".getBytes)
               out.flush()
 
               val response = readHttpResponse(in)
