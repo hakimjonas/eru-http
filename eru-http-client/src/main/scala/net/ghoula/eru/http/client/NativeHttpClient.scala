@@ -62,11 +62,23 @@ private[client] final class NativeHttpClient(
       _ <- request.validate.mapError(HttpError.InvalidRequest.apply)
       encodedBody <- encoder.encode(request.body).mapError(HttpError.BodyEncodeError.apply)
       encodedRequest = request.copy(body = encodedBody)
+
+      // Apply request interceptors
       interceptedRequest <- requestInterceptors.foldLeft(Eru.succeed(encodedRequest)) { (req, interceptor) =>
         req.flatMap(interceptor)
       }
+
       response <- sendInternal(interceptedRequest, redirectCount = 0)
-    } yield response
+
+      // Apply response interceptors
+      responseAsBody: Response[Body] = response.copy(body = Body.Binary(response.body))
+      interceptedResponse <- responseInterceptors.foldLeft(Eru.succeed(responseAsBody): Eru[HttpError, Response[Body]]) {
+        (resp, interceptor) => resp.flatMap(interceptor)
+      }
+
+      // Convert back to Response[Bytes]
+      responseBytes = interceptedResponse.copy(body = convertBodyToBytes(interceptedResponse))
+    } yield responseBytes
 
   /** Internal request execution with redirect handling
     */
