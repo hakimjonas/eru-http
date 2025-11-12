@@ -93,8 +93,8 @@ private[server] final class NativeHttpServer(
       // Parse request (blocking read - efficient on VT!)
       request <- HttpParser.parseRequest(secureSocket)
 
-      // Apply idle timeout
-      response <- handler(request)
+      // Apply idle timeout and handle errors
+      handlerResult <- handler(request)
         .timeout(java.time.Duration.ofMillis(config.idleTimeout.toMillis))
         .mapError {
           case _: TimeoutException =>
@@ -103,6 +103,13 @@ private[server] final class NativeHttpServer(
           case e: Throwable =>
             HttpError.NetworkError(s"Handler error: ${e.getMessage}", Some(e))
         }
+        .attempt
+
+      // Convert handler result to response (either success or error response)
+      response = handlerResult match {
+        case Result.Success(resp) => addConnectionHeader(resp)
+        case Result.Failure(httpError: HttpError) => addConnectionHeader(errorToResponse(httpError))
+      }
 
       // Write response (blocking write - efficient on VT!)
       _ <- HttpWriter.writeResponse(secureSocket, response)
@@ -112,26 +119,19 @@ private[server] final class NativeHttpServer(
     // Ensure socket is closed even if errors occur
     val cleanup = Eru.effect { socket.close() }.attempt.map(_ => ())
 
-    clientEffect
-      .attempt
-      .flatMap { result =>
-        cleanup.flatMap { _ =>
-          result match {
-            case Result.Success(_) =>
-              Eru.unit
-            case Result.Failure(httpError: HttpError) =>
-              // Log error and send error response if possible
-              Eru.effect {
-                try {
-                  val errorResponse = errorToResponse(httpError)
-                  HttpWriter.writeResponse(socket, errorResponse).unsafeRunSync()
-                } catch {
-                  case _: Exception => () // Best effort
-                }
-              }.mapError(e => HttpError.NetworkError(s"Error handling failed: ${e.getMessage}", Some(e)))
-          }
-        }
+    clientEffect.attempt.flatMap { _ => cleanup }
+  }
+
+  /** Add Connection: keep-alive header to response if not present
+    */
+  private def addConnectionHeader(response: Response[Body]): Response[Body] = {
+    if response.headers.contains(HeaderNames.Connection) then response
+    else {
+      response.headers.add(HeaderNames.Connection, "keep-alive") match {
+        case Result.Success(newHeaders) => response.copy(headers = newHeaders)
+        case Result.Failure(_) => response  // If adding header fails, just return original response
       }
+    }
   }
 
   /** Wrap socket with TLS/SSL.
