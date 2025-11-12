@@ -45,36 +45,42 @@ object SimpleHttpClient {
     val path = if uri.getPath.isEmpty then "/" else uri.getPath
 
     Using.resource(new Socket(host, port)) { socket =>
-      val out = new PrintWriter(socket.getOutputStream, true)
+      val out = socket.getOutputStream
       val in = new BufferedReader(new InputStreamReader(socket.getInputStream))
 
-      // Send request line
-      out.println(s"$method $path HTTP/1.1")
+      // Build HTTP request with proper CRLF line endings (required by HTTP/1.1)
+      val request = new StringBuilder
 
-      // Send Host header (required for HTTP/1.1)
-      out.println(s"Host: $host:$port")
+      // Request line
+      request.append(s"$method $path HTTP/1.1\r\n")
 
-      // Send Connection: close to avoid keep-alive timeout in tests
-      out.println("Connection: close")
+      // Host header (required for HTTP/1.1)
+      request.append(s"Host: $host:$port\r\n")
 
-      // Send custom headers
+      // Connection: close to avoid keep-alive timeout in tests
+      request.append("Connection: close\r\n")
+
+      // Custom headers
       headers.foreach { case (name, value) =>
-        out.println(s"$name: $value")
+        request.append(s"$name: $value\r\n")
       }
 
-      // Send Content-Length if body present
+      // Content-Length if body present
       body.foreach { b =>
-        out.println(s"Content-Length: ${b.getBytes.length}")
+        request.append(s"Content-Length: ${b.getBytes.length}\r\n")
       }
 
-      // End headers
-      out.println()
+      // End headers with empty line
+      request.append("\r\n")
+
+      // Send request headers
+      out.write(request.toString.getBytes)
 
       // Send body if present
       body.foreach { b =>
-        out.print(b)
-        out.flush()
+        out.write(b.getBytes)
       }
+      out.flush()
 
       // Read response
       parseResponse(in)
