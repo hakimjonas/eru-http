@@ -29,7 +29,10 @@ class MiddlewareSpec extends FunSuite {
     val response = app(request).assertSuccess
 
     assertEquals(response.status, StatusCode.Ok)
-    assertEquals(response.body.asInstanceOf[Body.Text].value, "Hello")
+    response.body match {
+      case Body.Text(value, _, _) => assertEquals(value, "Hello")
+      case other => fail(s"Expected Body.Text but got: $other")
+    }
   }
 
   test("Middleware - andThen composes middleware correctly") {
@@ -242,7 +245,10 @@ class MiddlewareSpec extends FunSuite {
     val response = app(request).assertSuccess
 
     assertEquals(response.status, StatusCode.Ok)
-    assertEquals(response.body.asInstanceOf[Body.Text].value, "Secret data")
+    response.body match {
+      case Body.Text(value, _, _) => assertEquals(value, "Secret data")
+      case other => fail(s"Expected Body.Text but got: $other")
+    }
   }
 
   test("Middleware - auth blocks unauthenticated requests") {
@@ -379,7 +385,10 @@ class MiddlewareSpec extends FunSuite {
     val response = app(request).assertSuccess
 
     assertEquals(response.status, StatusCode.BadRequest)
-    assertEquals(response.body.asInstanceOf[Body.Text].value, "Error: Bad input")
+    response.body match {
+      case Body.Text(value, _, _) => assertEquals(value, "Error: Bad input")
+      case other => fail(s"Expected Body.Text but got: $other")
+    }
   }
 
   test("Middleware - errorHandlerDefault converts InvalidRequest to 400") {
@@ -522,7 +531,10 @@ class MiddlewareSpec extends FunSuite {
     assert(response.headers.getFirst("X-Request-ID").isDefined)
 
     // Check response body
-    assertEquals(response.body.asInstanceOf[Body.Text].value, "Echo: Hello")
+    response.body match {
+      case Body.Text(value, _, _) => assertEquals(value, "Echo: Hello")
+      case other => fail(s"Expected Body.Text but got: $other")
+    }
   }
 
   test("Middleware - auth and CORS work together") {

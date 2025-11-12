@@ -313,18 +313,19 @@ class HttpServerIntegrationSpec extends FunSuite {
   private def readHttpResponse(in: BufferedReader): String = {
     val response = new StringBuilder
     var contentLength = 0
-    var line = ""
 
     // Read headers
-    while {
-      line = in.readLine()
-      if line != null && line.contains("Content-Length:") then {
-        contentLength = line.split(":")(1).trim.toInt
+    var continue = true
+    while continue do {
+      Option(in.readLine()) match {
+        case Some(line) if line.nonEmpty =>
+          if line.contains("Content-Length:") then {
+            contentLength = line.split(":")(1).trim.toInt
+          }
+          response.append(line).append("\n")
+        case _ =>
+          continue = false
       }
-      line != null && line.nonEmpty
-    } do {
-      response.append(line).append("\n")
-      ()
     }
 
     response.append("\n")
