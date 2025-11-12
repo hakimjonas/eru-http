@@ -171,7 +171,7 @@ object Middleware {
     */
   inline def auth(
     verify: Request[Body] => Boolean,
-    unauthorized: Eru[HttpError, Response[Body]] = {
+    unauthorized: => Eru[HttpError, Response[Body]] = {
       Response.unauthorized("Bearer", Body.empty).mapError {
         case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
         case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
@@ -196,7 +196,7 @@ object Middleware {
     */
   inline def bearerAuth(
     verify: String => Boolean,
-    unauthorized: Eru[HttpError, Response[Body]] = {
+    unauthorized: => Eru[HttpError, Response[Body]] = {
       Response.unauthorized("Bearer", Body.empty).mapError {
         case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
         case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
