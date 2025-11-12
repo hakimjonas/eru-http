@@ -162,7 +162,10 @@ object TestHttpServer {
       val path = request.uri()
 
       // Build JSON with headers
-      val headersMap = request.headers().iteratorAsString().asScala
+      val headersMap = request
+        .headers()
+        .iteratorAsString()
+        .asScala
         .map(entry => s""""${entry.getKey.toLowerCase}":"${entry.getValue}"""")
         .mkString(",")
 
@@ -175,7 +178,9 @@ object TestHttpServer {
         ""
       }
 
-      val responseBody = s"""{"method":"$method","path":"$path",$headersMap${if bodyContent.nonEmpty then s""","body":"${bodyContent.replaceAll("\"", "\\\\\"")}"""" else ""}}"""
+      val responseBody = s"""{"method":"$method","path":"$path",$headersMap${
+          if bodyContent.nonEmpty then s""","body":"${bodyContent.replaceAll("\"", "\\\\\"")}"""" else ""
+        }}"""
 
       val content = Unpooled.copiedBuffer(responseBody, CharsetUtil.UTF_8)
       val response = new DefaultFullHttpResponse(

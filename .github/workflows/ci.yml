@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        java: ['21']
+        scala: ['3.7.3']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: recursive
+
+    - name: Setup Java ${{ matrix.java }}
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: ${{ matrix.java }}
+        cache: 'sbt'
+
+    - name: Setup SBT
+      uses: sbt/setup-sbt@v1
+
+    - name: Cache SBT
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.sbt
+          ~/.ivy2/cache
+          ~/.coursier/cache
+        key: ${{ runner.os }}-sbt-${{ hashFiles('**/build.sbt', 'project/**') }}
+        restore-keys: |
+          ${{ runner.os }}-sbt-
+
+    - name: Compile
+      run: sbt compile
+
+    - name: Run tests
+      run: sbt test
+
+    - name: Check formatting
+      if: runner.os == 'Linux'
+      run: sbt scalafmtCheckAll scalafmtSbtCheck
+
+    - name: Generate coverage report
+      if: runner.os == 'Linux'
+      run: sbt coverage test coverageReport
+      continue-on-error: true
+
+    - name: Upload coverage to Codecov
+      if: runner.os == 'Linux'
+      uses: codecov/codecov-action@v4
+      with:
+        files: ./target/scala-3.7.3/coverage-report/cobertura.xml
+        flags: unittests
+        name: codecov-umbrella
+      continue-on-error: true
+
+  lint:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Java 21
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+        cache: 'sbt'
+
+    - name: Setup SBT
+      uses: sbt/setup-sbt@v1
+
+    - name: Check formatting
+      run: sbt scalafmtCheckAll scalafmtSbtCheck
+
+    - name: Run scalafix
+      run: sbt "scalafixAll --check"
+      continue-on-error: true
+
+  dependency-check:
+    name: Dependency Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Java 21
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '21'
+        cache: 'sbt'
+
+    - name: Setup SBT
+      uses: sbt/setup-sbt@v1
+
+    - name: Check for dependency updates
+      run: sbt dependencyUpdates
+      continue-on-error: true
+
+    - name: Check for vulnerabilities
+      run: sbt dependencyCheck
+      continue-on-error: true

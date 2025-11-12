@@ -17,7 +17,7 @@ object BenchmarkServer {
   }
 
   def runServer(port: Int = 8080): Unit = {
-    println(s"\n=== eru-http Benchmark Server ===\n")
+    println("\n=== eru-http Benchmark Server ===\n")
 
     // Shared data for stateful endpoints
     val counter = new java.util.concurrent.atomic.AtomicInteger(0)
@@ -119,14 +119,13 @@ object BenchmarkServer {
           // Simulate slow endpoint (10ms delay)
           Eru.effect {
             Thread.sleep(10)
-          }.mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
-            .map { _ =>
-              Response(
-                status = StatusCode.Ok,
-                headers = Headers.empty,
-                body = Body.Text("Slow response")
-              )
-            }
+          }.mapError(e => HttpError.NetworkError(e.getMessage, Some(e))).map { _ =>
+            Response(
+              status = StatusCode.Ok,
+              headers = Headers.empty,
+              body = Body.Text("Slow response")
+            )
+          }
 
         case _ =>
           Eru.succeed(
@@ -163,8 +162,7 @@ object BenchmarkServer {
         println("  GET  /slow          - Slow endpoint (10ms delay)")
         println("\nReady for benchmarking. Press Ctrl+C to stop.\n")
         // Keep server running
-        while true do
-          Thread.sleep(1000)
+        while true do Thread.sleep(1000)
       }.mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
     } yield ()
 

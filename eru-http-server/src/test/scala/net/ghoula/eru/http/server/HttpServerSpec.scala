@@ -444,17 +444,19 @@ class HttpServerSpec extends FunSuite {
       .andThen(Middleware.requestId())
       .apply(handler)
 
-    HttpServer.scoped(HttpServerConfig.localhost.withPort(0))(app) { server =>
-      for {
-        address <- server.start
-        _ <- Eru.effect {
-          val response = SimpleHttpClient.get(s"http://${address}")
-          assertEquals(response.status, 200)
-          assert(response.headers.contains("access-control-allow-origin"))
-          assert(response.headers.contains("x-request-id"))
-        }.mapError(e => HttpError.NetworkError(s"Test error: ${e.getMessage}", Some(e)))
-      } yield ()
-    }.assertSuccess
+    HttpServer
+      .scoped(HttpServerConfig.localhost.withPort(0))(app) { server =>
+        for {
+          address <- server.start
+          _ <- Eru.effect {
+            val response = SimpleHttpClient.get(s"http://${address}")
+            assertEquals(response.status, 200)
+            assert(response.headers.contains("access-control-allow-origin"))
+            assert(response.headers.contains("x-request-id"))
+          }.mapError(e => HttpError.NetworkError(s"Test error: ${e.getMessage}", Some(e)))
+        } yield ()
+      }
+      .assertSuccess
 
     assert(requestCount > 0, "Logging middleware should have been called")
   }
@@ -469,29 +471,31 @@ class HttpServerSpec extends FunSuite {
         )
       )
 
-    val checkToken: Request[Body] => Boolean = req =>
-      req.headers.getFirst("Authorization").exists(_.value == "Bearer secret-token")
+    val checkToken: Request[Body] => Boolean =
+      req => req.headers.getFirst("Authorization").exists(_.value == "Bearer secret-token")
 
-    val app = Middleware.auth(checkToken).apply(handler)
+    val app = Middleware.auth(checkToken, UnauthorizedHandler(() => Middleware.defaultUnauthorized())).apply(handler)
 
-    HttpServer.scoped(HttpServerConfig.localhost.withPort(0))(app) { server =>
-      for {
-        address <- server.start
-        _ <- Eru.effect {
-          // Request without token should be rejected
-          val unauthResponse = SimpleHttpClient.get(s"http://${address}")
-          assertEquals(unauthResponse.status, 401)
+    HttpServer
+      .scoped(HttpServerConfig.localhost.withPort(0))(app) { server =>
+        for {
+          address <- server.start
+          _ <- Eru.effect {
+            // Request without token should be rejected
+            val unauthResponse = SimpleHttpClient.get(s"http://${address}")
+            assertEquals(unauthResponse.status, 401)
 
-          // Request with valid token should succeed
-          val authResponse = SimpleHttpClient.get(
-            s"http://${address}",
-            headers = Map("Authorization" -> "Bearer secret-token")
-          )
-          assertEquals(authResponse.status, 200)
-          assertEquals(authResponse.body, "Protected resource")
-        }.mapError(e => HttpError.NetworkError(s"Test error: ${e.getMessage}", Some(e)))
-      } yield ()
-    }.assertSuccess
+            // Request with valid token should succeed
+            val authResponse = SimpleHttpClient.get(
+              s"http://${address}",
+              headers = Map("Authorization" -> "Bearer secret-token")
+            )
+            assertEquals(authResponse.status, 200)
+            assertEquals(authResponse.body, "Protected resource")
+          }.mapError(e => HttpError.NetworkError(s"Test error: ${e.getMessage}", Some(e)))
+        } yield ()
+      }
+      .assertSuccess
   }
 
   test("HttpServer - with error handling middleware") {
@@ -501,20 +505,22 @@ class HttpServerSpec extends FunSuite {
 
     val app = Middleware.errorHandlerDefault.apply(handler)
 
-    HttpServer.scoped(HttpServerConfig.localhost.withPort(0))(app) { server =>
-      for {
-        address <- server.start
-        _ <- Eru.effect {
-          // Error path should return 400
-          val errorResponse = SimpleHttpClient.get(s"http://${address}/error")
-          assertEquals(errorResponse.status, 400)
+    HttpServer
+      .scoped(HttpServerConfig.localhost.withPort(0))(app) { server =>
+        for {
+          address <- server.start
+          _ <- Eru.effect {
+            // Error path should return 400
+            val errorResponse = SimpleHttpClient.get(s"http://${address}/error")
+            assertEquals(errorResponse.status, 400)
 
-          // Success path should return 200
-          val okResponse = SimpleHttpClient.get(s"http://${address}/success")
-          assertEquals(okResponse.status, 200)
-        }.mapError(e => HttpError.NetworkError(s"Test error: ${e.getMessage}", Some(e)))
-      } yield ()
-    }.assertSuccess
+            // Success path should return 200
+            val okResponse = SimpleHttpClient.get(s"http://${address}/success")
+            assertEquals(okResponse.status, 200)
+          }.mapError(e => HttpError.NetworkError(s"Test error: ${e.getMessage}", Some(e)))
+        } yield ()
+      }
+      .assertSuccess
   }
 
   test("HttpServer - with conditional middleware for API routes") {
@@ -527,33 +533,37 @@ class HttpServerSpec extends FunSuite {
         )
       )
 
-    val checkToken: Request[Body] => Boolean = req =>
-      req.headers.getFirst("Authorization").exists(_.value == "valid-token")
+    val checkToken: Request[Body] => Boolean =
+      req => req.headers.getFirst("Authorization").exists(_.value == "valid-token")
 
     val app = Middleware
-      .when(_.uri.path.startsWith("/api"))(Middleware.auth(checkToken))
+      .when(_.uri.path.startsWith("/api"))(
+        Middleware.auth(checkToken, UnauthorizedHandler(() => Middleware.defaultUnauthorized()))
+      )
       .apply(handler)
 
-    HttpServer.scoped(HttpServerConfig.localhost.withPort(0))(app) { server =>
-      for {
-        address <- server.start
-        _ <- Eru.effect {
-          // Public routes should work without auth
-          val publicResponse = SimpleHttpClient.get(s"http://${address}/public")
-          assertEquals(publicResponse.status, 200)
+    HttpServer
+      .scoped(HttpServerConfig.localhost.withPort(0))(app) { server =>
+        for {
+          address <- server.start
+          _ <- Eru.effect {
+            // Public routes should work without auth
+            val publicResponse = SimpleHttpClient.get(s"http://${address}/public")
+            assertEquals(publicResponse.status, 200)
 
-          // API routes should require auth
-          val apiNoAuthResponse = SimpleHttpClient.get(s"http://${address}/api/users")
-          assertEquals(apiNoAuthResponse.status, 401)
+            // API routes should require auth
+            val apiNoAuthResponse = SimpleHttpClient.get(s"http://${address}/api/users")
+            assertEquals(apiNoAuthResponse.status, 401)
 
-          // API routes with auth should work
-          val apiWithAuthResponse = SimpleHttpClient.get(
-            s"http://${address}/api/users",
-            headers = Map("Authorization" -> "valid-token")
-          )
-          assertEquals(apiWithAuthResponse.status, 200)
-        }.mapError(e => HttpError.NetworkError(s"Test error: ${e.getMessage}", Some(e)))
-      } yield ()
-    }.assertSuccess
+            // API routes with auth should work
+            val apiWithAuthResponse = SimpleHttpClient.get(
+              s"http://${address}/api/users",
+              headers = Map("Authorization" -> "valid-token")
+            )
+            assertEquals(apiWithAuthResponse.status, 200)
+          }.mapError(e => HttpError.NetworkError(s"Test error: ${e.getMessage}", Some(e)))
+        } yield ()
+      }
+      .assertSuccess
   }
 }

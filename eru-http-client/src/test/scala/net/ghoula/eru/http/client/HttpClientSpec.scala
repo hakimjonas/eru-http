@@ -7,6 +7,7 @@ import scala.concurrent.duration.*
 
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
+import net.ghoula.eru.prelude.defaultRuntime
 
 import TestHelpers.*
 
