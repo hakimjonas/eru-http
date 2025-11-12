@@ -98,7 +98,8 @@ object SimpleHttpClient {
 
     // Read headers
     val headersMap = scala.collection.mutable.Map[String, String]()
-    var contentLength = 0
+    var contentLength = Option.empty[Int]
+    var connectionClose = false
     var continue = true
 
     while continue do {
@@ -111,7 +112,9 @@ object SimpleHttpClient {
             headersMap(name) = value
 
             if name == "content-length" then {
-              contentLength = value.toInt
+              contentLength = Some(value.toInt)
+            } else if name == "connection" then {
+              connectionClose = value.toLowerCase == "close"
             }
           }
         case _ =>
@@ -121,17 +124,34 @@ object SimpleHttpClient {
 
     // Read body
     val bodyBuilder = new StringBuilder
-    if contentLength > 0 then {
-      val buffer = new Array[Char](contentLength)
-      var totalRead = 0
-      while totalRead < contentLength do {
-        val read = in.read(buffer, totalRead, contentLength - totalRead)
-        if read == -1 then {
-          throw new RuntimeException("Connection closed before reading full body")
+    contentLength match {
+      case Some(length) if length > 0 =>
+        // Read exact number of bytes specified by Content-Length
+        val buffer = new Array[Char](length)
+        var totalRead = 0
+        while totalRead < length do {
+          val read = in.read(buffer, totalRead, length - totalRead)
+          if read == -1 then {
+            throw new RuntimeException("Connection closed before reading full body")
+          }
+          totalRead += read
         }
-        totalRead += read
-      }
-      bodyBuilder.append(buffer, 0, totalRead)
+        bodyBuilder.append(buffer, 0, totalRead)
+
+      case _ if connectionClose =>
+        // No Content-Length but Connection: close - read until EOF
+        var line = Option(in.readLine())
+        while line.isDefined do {
+          bodyBuilder.append(line.get)
+          line = Option(in.readLine())
+          if line.isDefined then {
+            bodyBuilder.append("\n")
+          }
+        }
+
+      case _ =>
+        // No body to read
+        ()
     }
 
     Response(
