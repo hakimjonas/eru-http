@@ -129,7 +129,9 @@ private[server] final class NativeHttpServer(
                 case _: Exception => () // Best effort
               }
             }.mapError(e => HttpError.NetworkError(s"Error handling failed: ${e.getMessage}", Some(e)))
-          case throwable: Throwable =>
+          case _ =>
+            // Must be a Throwable from the union type HttpError | Throwable
+            val throwable = error.asInstanceOf[Throwable]
             Eru.effect {
               System.err.println(s"Unexpected error handling client: ${throwable.getMessage}")
               throwable.printStackTrace()
