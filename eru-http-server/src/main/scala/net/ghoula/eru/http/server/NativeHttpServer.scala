@@ -127,7 +127,7 @@ private[server] final class NativeHttpServer(
   private def addConnectionHeader(response: Response[Body]): Response[Body] = {
     if response.headers.contains(HeaderNames.Connection) then response
     else {
-      response.headers.add(HeaderNames.Connection, "keep-alive") match {
+      response.headers.add(HeaderNames.Connection, "keep-alive").attempt.unsafeRunSync() match {
         case Result.Success(newHeaders) => response.copy(headers = newHeaders)
         case Result.Failure(_) => response  // If adding header fails, just return original response
       }
