@@ -8,8 +8,8 @@ import net.ghoula.eru.*
 
 /** HTTP/1.1 Writer for requests and responses.
   *
-  * Implements RFC 9112 (HTTP/1.1) serialization using blocking NIO.
-  * Designed to work efficiently with Eru's Virtual Threads.
+  * Implements RFC 9112 (HTTP/1.1) serialization using blocking NIO. Designed to work efficiently
+  * with Eru's Virtual Threads.
   */
 object HttpWriter {
 
@@ -19,14 +19,13 @@ object HttpWriter {
 
   /** Write an HTTP request to a socket channel.
     *
-    * Format (RFC 9112 Section 3):
-    * request-line = method SP request-target SP HTTP-version CRLF
-    * *( header-field CRLF )
-    * CRLF
-    * [ message-body ]
+    * Format (RFC 9112 Section 3): request-line = method SP request-target SP HTTP-version CRLF *(
+    * header-field CRLF ) CRLF [ message-body ]
     *
-    * @param socket The socket channel to write to (must be in blocking mode)
-    * @param request The request to write
+    * @param socket
+    *   The socket channel to write to (must be in blocking mode)
+    * @param request
+    *   The request to write
     */
   def writeRequest(socket: SocketChannel, request: Request[Body]): Eru[HttpError, Unit] =
     Eru.effect {
@@ -49,19 +48,19 @@ object HttpWriter {
 
   /** Write an HTTP response to a socket channel.
     *
-    * Format (RFC 9112 Section 4):
-    * status-line = HTTP-version SP status-code SP [ reason-phrase ] CRLF
-    * *( header-field CRLF )
-    * CRLF
-    * [ message-body ]
+    * Format (RFC 9112 Section 4): status-line = HTTP-version SP status-code SP [ reason-phrase ]
+    * CRLF *( header-field CRLF ) CRLF [ message-body ]
     *
-    * @param socket The socket channel to write to (must be in blocking mode)
-    * @param response The response to write
+    * @param socket
+    *   The socket channel to write to (must be in blocking mode)
+    * @param response
+    *   The response to write
     */
   def writeResponse(socket: SocketChannel, response: Response[Body]): Eru[HttpError, Unit] =
     Eru.effect {
       // Build status line
-      val statusLine = s"${formatVersion(response.version)}$SP${response.status.value}$SP${response.status.reasonPhrase}$CRLF"
+      val statusLine =
+        s"${formatVersion(response.version)}$SP${response.status.value}$SP${response.status.reasonPhrase}$CRLF"
 
       // Build headers
       val headersStr = buildHeaders(response.headers)
@@ -79,8 +78,8 @@ object HttpWriter {
   /** Build request target from URI
     *
     * RFC 9112 Section 3.2:
-    * - origin-form: absolute-path [ "?" query ]
-    * - absolute-form: absolute-URI (for proxy requests)
+    *   - origin-form: absolute-path [ "?" query ]
+    *   - absolute-form: absolute-URI (for proxy requests)
     */
   private def buildRequestTarget(uri: Uri): String = {
     val path = if uri.path.isEmpty then "/" else uri.path
@@ -137,8 +136,8 @@ object HttpWriter {
 
   /** Write all bytes from buffer to socket (handles partial writes)
     *
-    * In blocking mode, socket.write() may still write fewer bytes than requested.
-    * This method ensures all bytes are written.
+    * In blocking mode, socket.write() may still write fewer bytes than requested. This method
+    * ensures all bytes are written.
     */
   private def writeAll(socket: SocketChannel, buffer: ByteBuffer): Unit = {
     while buffer.hasRemaining do {
@@ -152,8 +151,8 @@ object HttpWriter {
 
   /** Write chunked body (Transfer-Encoding: chunked)
     *
-    * RFC 9112 Section 7.1: Chunked transfer coding
-    * Format: chunk-size CRLF chunk-data CRLF ... 0 CRLF CRLF
+    * RFC 9112 Section 7.1: Chunked transfer coding Format: chunk-size CRLF chunk-data CRLF ... 0
+    * CRLF CRLF
     *
     * This is useful for streaming responses when content length is unknown.
     */

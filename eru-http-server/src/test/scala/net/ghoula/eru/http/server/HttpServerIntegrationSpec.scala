@@ -16,8 +16,8 @@ import TestHelpers.*
 
 /** Integration tests for HTTP server protocol compliance.
   *
-  * These tests verify HTTP/1.1 protocol compliance, connection management,
-  * and behavior under concurrent load.
+  * These tests verify HTTP/1.1 protocol compliance, connection management, and behavior under
+  * concurrent load.
   */
 class HttpServerIntegrationSpec extends FunSuite {
 
@@ -74,7 +74,7 @@ class HttpServerIntegrationSpec extends FunSuite {
               val in = new BufferedReader(new InputStreamReader(socket.getInputStream))
 
               // First request with proper CRLF line endings
-              out.write(s"GET / HTTP/1.1\r\n".getBytes)
+              out.write("GET / HTTP/1.1\r\n".getBytes)
               out.write(s"Host: ${address.host}:${address.port}\r\n".getBytes)
               out.write("Connection: keep-alive\r\n".getBytes)
               out.write("\r\n".getBytes)
@@ -83,10 +83,13 @@ class HttpServerIntegrationSpec extends FunSuite {
               // Read first response
               val response1 = readHttpResponse(in)
               assert(response1.contains("HTTP/1.1 200"), s"Expected 200 OK, got: ${response1.take(100)}")
-              assert(response1.toLowerCase.contains("connection: keep-alive"), s"First response should have keep-alive. Got:\n$response1")
+              assert(
+                response1.toLowerCase.contains("connection: keep-alive"),
+                s"First response should have keep-alive. Got:\n$response1"
+              )
 
               // Second request on same connection
-              out.write(s"GET / HTTP/1.1\r\n".getBytes)
+              out.write("GET / HTTP/1.1\r\n".getBytes)
               out.write(s"Host: ${address.host}:${address.port}\r\n".getBytes)
               out.write("Connection: keep-alive\r\n".getBytes)
               out.write("\r\n".getBytes)
@@ -94,7 +97,10 @@ class HttpServerIntegrationSpec extends FunSuite {
 
               // Read second response - if connection was closed, this will fail
               val response2 = readHttpResponse(in)
-              assert(response2.contains("HTTP/1.1 200"), s"Expected 200 OK on reused connection, got: ${response2.take(100)}")
+              assert(
+                response2.contains("HTTP/1.1 200"),
+                s"Expected 200 OK on reused connection, got: ${response2.take(100)}"
+              )
               assert(response2.toLowerCase.contains("connection: keep-alive"), "Second response should have keep-alive")
             }
           }.mapError(e => HttpError.NetworkError(s"Test error: ${e.getMessage}", Some(e)))
@@ -123,7 +129,7 @@ class HttpServerIntegrationSpec extends FunSuite {
               val in = new BufferedReader(new InputStreamReader(socket.getInputStream))
 
               // Request with Connection: close using proper CRLF line endings
-              out.write(s"GET / HTTP/1.1\r\n".getBytes)
+              out.write("GET / HTTP/1.1\r\n".getBytes)
               out.write(s"Host: ${address.host}:${address.port}\r\n".getBytes)
               out.write("Connection: close\r\n".getBytes)
               out.write("\r\n".getBytes)
@@ -131,7 +137,10 @@ class HttpServerIntegrationSpec extends FunSuite {
 
               val response = readHttpResponse(in)
               assert(response.contains("HTTP/1.1 200"), "Should get 200 OK")
-              assert(response.toLowerCase.contains("connection: close"), s"Response should have Connection: close. Got:\n$response")
+              assert(
+                response.toLowerCase.contains("connection: close"),
+                s"Response should have Connection: close. Got:\n$response"
+              )
 
               // Consume any remaining bytes from the response body
               while in.ready() do { in.read(); () }
@@ -143,7 +152,11 @@ class HttpServerIntegrationSpec extends FunSuite {
               val isClosed = socket.isClosed || socket.isInputShutdown
               if !isClosed then {
                 val nextChar = in.read()
-                assertEquals(nextChar, -1, s"Connection should be closed after Connection: close, but read returned $nextChar")
+                assertEquals(
+                  nextChar,
+                  -1,
+                  s"Connection should be closed after Connection: close, but read returned $nextChar"
+                )
               }
             }
           }.mapError(e => HttpError.NetworkError(s"Test error: ${e.getMessage}", Some(e)))
@@ -262,8 +275,7 @@ class HttpServerIntegrationSpec extends FunSuite {
     val handler: RequestHandler = req =>
       if req.uri.path.contains("error") then
         Eru.fail(HttpError.InvalidRequest(InvalidRequest("Simulated error", "RFC")))
-      else
-        Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.Text("OK")))
+      else Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.Text("OK")))
 
     HttpServer
       .scoped(HttpServerConfig.localhost.withPort(0))(handler) { server =>

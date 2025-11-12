@@ -7,8 +7,8 @@ import net.ghoula.eru.*
 
 /** HTTP/1.1 Parser for requests and responses.
   *
-  * Implements RFC 9112 (HTTP/1.1) parsing using blocking NIO.
-  * Designed to work efficiently with Eru's Virtual Threads.
+  * Implements RFC 9112 (HTTP/1.1) parsing using blocking NIO. Designed to work efficiently with
+  * Eru's Virtual Threads.
   */
 object HttpParser {
 
@@ -19,8 +19,10 @@ object HttpParser {
 
   /** Parse an HTTP request from a socket channel.
     *
-    * @param socket The socket channel to read from (must be in blocking mode)
-    * @return An Eru effect containing the parsed request
+    * @param socket
+    *   The socket channel to read from (must be in blocking mode)
+    * @return
+    *   An Eru effect containing the parsed request
     */
   def parseRequest(socket: SocketChannel): Eru[HttpError, Request[Body]] = for {
     requestLine <- readLine(socket)
@@ -31,8 +33,10 @@ object HttpParser {
 
   /** Parse an HTTP response from a socket channel.
     *
-    * @param socket The socket channel to read from (must be in blocking mode)
-    * @return An Eru effect containing the parsed response
+    * @param socket
+    *   The socket channel to read from (must be in blocking mode)
+    * @return
+    *   An Eru effect containing the parsed response
     */
   def parseResponse(socket: SocketChannel): Eru[HttpError, Response[Body]] = for {
     statusLine <- readLine(socket)
@@ -48,10 +52,14 @@ object HttpParser {
   private def parseRequestLine(line: String): Eru[HttpError, (Method, Uri, HttpVersion)] = {
     val parts = line.split(SP, 3)
     if parts.length != 3 then {
-      Eru.fail(HttpError.InvalidRequest(InvalidRequest(
-        s"Invalid request line: expected 'METHOD URI VERSION', got: $line",
-        "RFC 9112 Section 3"
-      )))
+      Eru.fail(
+        HttpError.InvalidRequest(
+          InvalidRequest(
+            s"Invalid request line: expected 'METHOD URI VERSION', got: $line",
+            "RFC 9112 Section 3"
+          )
+        )
+      )
     } else {
       for {
         method <- Method.parse(parts(0)).mapError(HttpError.InvalidMethod.apply)
@@ -68,10 +76,14 @@ object HttpParser {
   private def parseStatusLine(line: String): Eru[HttpError, (HttpVersion, StatusCode, String)] = {
     val parts = line.split(SP, 3)
     if parts.length < 2 then {
-      Eru.fail(HttpError.InvalidResponse(InvalidResponse(
-        s"Invalid status line: expected 'VERSION CODE [REASON]', got: $line",
-        "RFC 9112 Section 4"
-      )))
+      Eru.fail(
+        HttpError.InvalidResponse(
+          InvalidResponse(
+            s"Invalid status line: expected 'VERSION CODE [REASON]', got: $line",
+            "RFC 9112 Section 4"
+          )
+        )
+      )
     } else {
       for {
         version <- parseHttpVersion(parts(0))
@@ -88,10 +100,15 @@ object HttpParser {
       case "HTTP/1.0" => Eru.succeed(HttpVersion.HTTP_1_0)
       case "HTTP/1.1" => Eru.succeed(HttpVersion.HTTP_1_1)
       case "HTTP/2.0" => Eru.succeed(HttpVersion.HTTP_2_0)
-      case other => Eru.fail(HttpError.InvalidRequest(InvalidRequest(
-        s"Unsupported HTTP version: $other (expected HTTP/1.0 or HTTP/1.1)",
-        "RFC 9112 Section 2.3"
-      )))
+      case other =>
+        Eru.fail(
+          HttpError.InvalidRequest(
+            InvalidRequest(
+              s"Unsupported HTTP version: $other (expected HTTP/1.0 or HTTP/1.1)",
+              "RFC 9112 Section 2.3"
+            )
+          )
+        )
     }
   }
 
@@ -102,10 +119,14 @@ object HttpParser {
   private def readHeaders(socket: SocketChannel): Eru[HttpError, Headers] = {
     def loop(headers: Headers, bytesRead: Int): Eru[HttpError, Headers] = {
       if bytesRead > MAX_HEADERS_SIZE then {
-        Eru.fail(HttpError.InvalidRequest(InvalidRequest(
-          s"Headers too large (max $MAX_HEADERS_SIZE bytes)",
-          "RFC 9112 Section 2.3"
-        )))
+        Eru.fail(
+          HttpError.InvalidRequest(
+            InvalidRequest(
+              s"Headers too large (max $MAX_HEADERS_SIZE bytes)",
+              "RFC 9112 Section 2.3"
+            )
+          )
+        )
       } else {
         readLine(socket).flatMap { line =>
           if line.isEmpty then {
@@ -113,7 +134,8 @@ object HttpParser {
             Eru.succeed(headers)
           } else {
             parseHeaderLine(line).flatMap { case (name, value) =>
-              headers.add(name, value)
+              headers
+                .add(name, value)
                 .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid header: $e", "RFC 9110 Section 5.5")))
                 .flatMap(newHeaders => loop(newHeaders, bytesRead + line.length + 2))
             }
@@ -130,10 +152,14 @@ object HttpParser {
   private def parseHeaderLine(line: String): Eru[HttpError, (String, String)] = {
     val colonIndex = line.indexOf(COLON)
     if colonIndex <= 0 then {
-      Eru.fail(HttpError.InvalidRequest(InvalidRequest(
-        s"Invalid header line (missing colon): $line",
-        "RFC 9112 Section 5"
-      )))
+      Eru.fail(
+        HttpError.InvalidRequest(
+          InvalidRequest(
+            s"Invalid header line (missing colon): $line",
+            "RFC 9112 Section 5"
+          )
+        )
+      )
     } else {
       val name = line.substring(0, colonIndex).trim
       val value = line.substring(colonIndex + 1).trim
@@ -144,9 +170,9 @@ object HttpParser {
   /** Read message body based on Content-Length or Transfer-Encoding
     *
     * RFC 9112 Section 6: Message body determined by:
-    * 1. Transfer-Encoding: chunked
-    * 2. Content-Length header
-    * 3. Connection close (for responses only)
+    *   1. Transfer-Encoding: chunked
+    *   2. Content-Length header
+    *   3. Connection close (for responses only)
     */
   private def readBody(socket: SocketChannel, headers: Headers): Eru[HttpError, Body] = {
     // Check Transfer-Encoding first (takes precedence over Content-Length)
@@ -209,30 +235,31 @@ object HttpParser {
 
   /** Read chunked message body (Transfer-Encoding: chunked)
     *
-    * RFC 9112 Section 7.1: Chunked transfer coding
-    * Format: chunk-size CRLF chunk-data CRLF ... 0 CRLF CRLF
+    * RFC 9112 Section 7.1: Chunked transfer coding Format: chunk-size CRLF chunk-data CRLF ... 0
+    * CRLF CRLF
     */
   private def readChunkedBody(socket: SocketChannel): Eru[HttpError, Body] = {
     def readChunks(accumulator: Array[Byte]): Eru[HttpError, Body] = {
       for {
         chunkSizeLine <- readLine(socket)
         chunkSize <- parseChunkSize(chunkSizeLine)
-        result <- if chunkSize == 0 then {
-          // Last chunk, read trailing headers (we ignore them for now)
-          readLine(socket).flatMap { _ =>
-            Eru.succeed(Body.Binary(Bytes.fromArray(accumulator), None))
-          }
-        } else {
-          for {
-            chunkData <- readFixedLengthBody(socket, chunkSize)
-            _ <- readLine(socket) // Read trailing CRLF after chunk data
-            bytes = chunkData match {
-              case Body.Binary(b, _) => b.toArray
-              case _ => Array.empty[Byte]
+        result <-
+          if chunkSize == 0 then {
+            // Last chunk, read trailing headers (we ignore them for now)
+            readLine(socket).flatMap { _ =>
+              Eru.succeed(Body.Binary(Bytes.fromArray(accumulator), None))
             }
-            result <- readChunks(accumulator ++ bytes)
-          } yield result
-        }
+          } else {
+            for {
+              chunkData <- readFixedLengthBody(socket, chunkSize)
+              _ <- readLine(socket) // Read trailing CRLF after chunk data
+              bytes = chunkData match {
+                case Body.Binary(b, _) => b.toArray
+                case _ => Array.empty[Byte]
+              }
+              result <- readChunks(accumulator ++ bytes)
+            } yield result
+          }
       } yield result
     }
 
@@ -247,17 +274,19 @@ object HttpParser {
     Eru.effect {
       Integer.parseInt(sizeStr, 16)
     }.mapError { case _: NumberFormatException =>
-      HttpError.InvalidRequest(InvalidRequest(
-        s"Invalid chunk size: $sizeStr",
-        "RFC 9112 Section 7.1"
-      ))
+      HttpError.InvalidRequest(
+        InvalidRequest(
+          s"Invalid chunk size: $sizeStr",
+          "RFC 9112 Section 7.1"
+        )
+      )
     }
   }
 
   /** Read a single line from socket (up to CRLF)
     *
-    * This reads one byte at a time to find CRLF. Not the most efficient,
-    * but simple and correct for now. Can be optimized with buffering later.
+    * This reads one byte at a time to find CRLF. Not the most efficient, but simple and correct for
+    * now. Can be optimized with buffering later.
     */
   private def readLine(socket: SocketChannel): Eru[HttpError, String] =
     Eru.effect {

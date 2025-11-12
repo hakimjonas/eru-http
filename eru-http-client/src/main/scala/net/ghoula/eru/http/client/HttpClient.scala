@@ -64,10 +64,9 @@ trait HttpClient {
 
   /** Apply both request and response interceptors.
     *
-    * @example {{{
-    *   val (reqLog, respLog) = Interceptor.logging(println)
-    *   client.withInterceptor(reqLog, respLog)
-    * }}}
+    * @example
+    *   {{{ val (reqLog, respLog) = Interceptor.logging(println) client.withInterceptor(reqLog,
+    *   respLog) }}}
     */
   inline def withInterceptor(
     request: RequestInterceptor,
@@ -121,7 +120,9 @@ object HttpClient {
     * @return
     *   An Eru effect containing the result or an error
     */
-  def scoped[A](config: HttpClientConfig)(use: HttpClient => Eru[HttpError, A])(using runtime: EruRuntime): Eru[HttpError, A] =
+  def scoped[A](
+    config: HttpClientConfig
+  )(use: HttpClient => Eru[HttpError, A])(using runtime: EruRuntime): Eru[HttpError, A] =
     for {
       client <- create(config)
       result <- use(client)

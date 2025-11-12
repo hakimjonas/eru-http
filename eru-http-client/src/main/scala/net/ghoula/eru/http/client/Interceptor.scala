@@ -6,42 +6,41 @@ import net.ghoula.eru.http.*
 /** Request interceptor transforms requests before sending.
   *
   * Interceptors work with Eru effects, enabling:
-  * - Composable transformations
-  * - Error handling
-  * - Async operations (e.g., fetch token from cache)
-  * - Type-safe composition
+  *   - Composable transformations
+  *   - Error handling
+  *   - Async operations (e.g., fetch token from cache)
+  *   - Type-safe composition
   *
-  * @example {{{
-  *   val addAuth: RequestInterceptor = req =>
-  *     Eru.succeed(req.setHeader("Authorization", s"Bearer \$token"))
+  * @example
+  *   {{{ val addAuth: RequestInterceptor = req => Eru.succeed(req.setHeader("Authorization",
+  *   s"Bearer \$token"))
   *
-  *   val addRequestId: RequestInterceptor = req =>
-  *     Eru.succeed(req.setHeader("X-Request-ID", UUID.randomUUID().toString))
+  * val addRequestId: RequestInterceptor = req => Eru.succeed(req.setHeader("X-Request-ID",
+  * UUID.randomUUID().toString))
   *
-  *   val composed = addAuth.andThen(addRequestId)
-  * }}}
+  * val composed = addAuth.andThen(addRequestId) }}}
   */
 type RequestInterceptor = Request[Body] => Eru[HttpError, Request[Body]]
 
 /** Response interceptor transforms responses after receiving.
   *
   * Can be used for:
-  * - Logging
-  * - Metrics
-  * - Error transformation
-  * - Response validation
+  *   - Logging
+  *   - Metrics
+  *   - Error transformation
+  *   - Response validation
   */
 type ResponseInterceptor = Response[Body] => Eru[HttpError, Response[Body]]
 
 /** Extension methods for composing interceptors. */
 extension (self: RequestInterceptor) {
+
   /** Compose this interceptor with another, applying this one first.
     *
     * Uses Eru's flatMap for pure functional composition.
     */
   @scala.annotation.targetName("andThenRequest")
-  inline def andThen(next: RequestInterceptor): RequestInterceptor = req =>
-    self(req).flatMap(next)
+  inline def andThen(next: RequestInterceptor): RequestInterceptor = req => self(req).flatMap(next)
 
   /** Compose with multiple interceptors in sequence. */
   @scala.annotation.targetName("andThenAllRequests")
@@ -50,10 +49,10 @@ extension (self: RequestInterceptor) {
 }
 
 extension (self: ResponseInterceptor) {
+
   /** Compose this interceptor with another, applying this one first. */
   @scala.annotation.targetName("andThenResponse")
-  inline def andThen(next: ResponseInterceptor): ResponseInterceptor = resp =>
-    self(resp).flatMap(next)
+  inline def andThen(next: ResponseInterceptor): ResponseInterceptor = resp => self(resp).flatMap(next)
 
   /** Compose with multiple interceptors in sequence. */
   @scala.annotation.targetName("andThenAllResponses")
@@ -95,8 +94,7 @@ object Interceptor {
     addHeader("User-Agent", agent)
 
   /** Add custom header with dynamic value (e.g., request ID). */
-  inline def withHeader(name: String)(getValue: => String): RequestInterceptor = req =>
-    addHeader(name, getValue)(req)
+  inline def withHeader(name: String)(getValue: => String): RequestInterceptor = req => addHeader(name, getValue)(req)
 
   /** Request logging interceptor. */
   inline def logRequest(log: String => Unit): RequestInterceptor = req =>
