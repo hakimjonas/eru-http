@@ -117,6 +117,7 @@ private[server] final class NativeHttpServer(
           .timeout(java.time.Duration.ofMillis(config.idleTimeout.toMillis))
           .mapError {
             case _: TimeoutException => HttpError.NetworkError("Keep-alive timeout", None)
+            case e: HttpError => e  // Pass through HttpError from parser
             case e: Throwable => HttpError.NetworkError(s"Parse error: ${e.getMessage}", Some(e))
           }
           .attempt
