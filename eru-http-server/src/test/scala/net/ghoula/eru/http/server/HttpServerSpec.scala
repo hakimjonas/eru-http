@@ -472,7 +472,7 @@ class HttpServerSpec extends FunSuite {
     val checkToken: Request[Body] => Boolean = req =>
       req.headers.getFirst("Authorization").exists(_.value == "Bearer secret-token")
 
-    val app = Middleware.auth(checkToken).apply(handler)
+    val app = Middleware.auth(checkToken, Middleware.defaultUnauthorized()).apply(handler)
 
     HttpServer.scoped(HttpServerConfig.localhost.withPort(0))(app) { server =>
       for {
@@ -531,7 +531,7 @@ class HttpServerSpec extends FunSuite {
       req.headers.getFirst("Authorization").exists(_.value == "valid-token")
 
     val app = Middleware
-      .when(_.uri.path.startsWith("/api"))(Middleware.auth(checkToken))
+      .when(_.uri.path.startsWith("/api"))(Middleware.auth(checkToken, Middleware.defaultUnauthorized()))
       .apply(handler)
 
     HttpServer.scoped(HttpServerConfig.localhost.withPort(0))(app) { server =>
