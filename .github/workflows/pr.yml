@@ -98,18 +98,14 @@ jobs:
           const validateJob = '${{ needs.validate.result }}';
           const status = validateJob === 'success' ? '✅ Passed' : '❌ Failed';
 
-          const body = `## CI Results
-
-**Build Status:** ${status}
-
-- **Compilation:** ${validateJob === 'success' ? '✅' : '❌'}
-- **Tests:** ${validateJob === 'success' ? '✅' : '❌'}
-- **Formatting:** ${validateJob === 'success' ? '✅' : '❌'}
-
-${validateJob === 'success' ?
-  'All checks passed! 🎉' :
-  'Some checks failed. Please review the workflow logs for details.'}
-          `;
+          const body = '## CI Results\n\n' +
+            '**Build Status:** ' + status + '\n\n' +
+            '- **Compilation:** ' + (validateJob === 'success' ? '✅' : '❌') + '\n' +
+            '- **Tests:** ' + (validateJob === 'success' ? '✅' : '❌') + '\n' +
+            '- **Formatting:** ' + (validateJob === 'success' ? '✅' : '❌') + '\n\n' +
+            (validateJob === 'success' ?
+              'All checks passed! 🎉' :
+              'Some checks failed. Please review the workflow logs for details.');
 
           if (botComment) {
             await github.rest.issues.updateComment({
