@@ -83,8 +83,7 @@ object SimpleHttpClient {
 
   private def parseResponse(in: BufferedReader): Response = {
     // Read status line
-    val statusLine = in.readLine()
-    if statusLine == null then {
+    val statusLine = Option(in.readLine()).getOrElse {
       throw new RuntimeException("Empty response from server")
     }
 
@@ -93,21 +92,25 @@ object SimpleHttpClient {
 
     // Read headers
     val headersMap = scala.collection.mutable.Map[String, String]()
-    var line = in.readLine()
     var contentLength = 0
+    var continue = true
 
-    while line != null && line.nonEmpty do {
-      val colonIdx = line.indexOf(':')
-      if colonIdx > 0 then {
-        val name = line.substring(0, colonIdx).trim.toLowerCase
-        val value = line.substring(colonIdx + 1).trim
-        headersMap(name) = value
+    while continue do {
+      Option(in.readLine()) match {
+        case Some(line) if line.nonEmpty =>
+          val colonIdx = line.indexOf(':')
+          if colonIdx > 0 then {
+            val name = line.substring(0, colonIdx).trim.toLowerCase
+            val value = line.substring(colonIdx + 1).trim
+            headersMap(name) = value
 
-        if name == "content-length" then {
-          contentLength = value.toInt
-        }
+            if name == "content-length" then {
+              contentLength = value.toInt
+            }
+          }
+        case _ =>
+          continue = false
       }
-      line = in.readLine()
     }
 
     // Read body
