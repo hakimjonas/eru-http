@@ -57,6 +57,9 @@ extension (middleware: Middleware) {
 /** Built-in middleware for common use cases. */
 object Middleware {
 
+  /** Type alias for unauthorized response functions to avoid cyclic references. */
+  type UnauthorizedResponse = () => Eru[HttpError, Response[Body]]
+
   /** Logging middleware that logs requests and responses.
     *
     * @param log
@@ -171,7 +174,7 @@ object Middleware {
     */
   def auth(
     verify: Request[Body] => Boolean,
-    unauthorized: () => Eru[HttpError, Response[Body]]
+    unauthorized: UnauthorizedResponse
   ): Middleware = handler => req => {
     if verify(req) then handler(req)
     else unauthorized()
@@ -191,7 +194,7 @@ object Middleware {
     */
   def bearerAuth(
     verify: String => Boolean,
-    unauthorized: () => Eru[HttpError, Response[Body]]
+    unauthorized: UnauthorizedResponse
   ): Middleware = handler => req => {
     val token = req.headers
       .getFirst("Authorization")
