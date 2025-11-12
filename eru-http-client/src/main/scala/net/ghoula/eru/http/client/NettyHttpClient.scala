@@ -49,13 +49,16 @@ private[client] final class NettyHttpClient(
       response <- sendInternal(interceptedRequest, redirectCount = 0)
       // Apply response interceptors (convert Bytes to Body first)
       responseAsBody: Response[Body] = response.copy(body = Body.Binary(response.body))
-      interceptedResponse <- responseInterceptors.foldLeft(Eru.succeed(responseAsBody): Eru[HttpError, Response[Body]]) { (resp, interceptor) =>
+      interceptedResponse <- responseInterceptors.foldLeft(
+        Eru.succeed(responseAsBody): Eru[HttpError, Response[Body]]
+      ) { (resp, interceptor) =>
         resp.flatMap(interceptor)
       }
       // Convert back to Response[Bytes]
       finalResponse = interceptedResponse.body match {
         case Body.Empty => interceptedResponse.copy(body = Bytes.empty)
-        case Body.Text(text, _, charset) => interceptedResponse.copy(body = Bytes.fromArray(text.getBytes(charset.toJavaCharset)))
+        case Body.Text(text, _, charset) =>
+          interceptedResponse.copy(body = Bytes.fromArray(text.getBytes(charset.toJavaCharset)))
         case Body.Binary(bytes, _) => interceptedResponse.copy(body = bytes)
         case Body.Stream(_, _, _) =>
           // Should not happen in response interceptors for client

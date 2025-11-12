@@ -231,7 +231,19 @@ object Cookie {
               }
             }
 
-            Eru.succeed(Cookie(name, value, attrs.domain, attrs.path, attrs.expires, attrs.maxAge, attrs.secure, attrs.httpOnly, attrs.sameSite))
+            Eru.succeed(
+              Cookie(
+                name,
+                value,
+                attrs.domain,
+                attrs.path,
+                attrs.expires,
+                attrs.maxAge,
+                attrs.secure,
+                attrs.httpOnly,
+                attrs.sameSite
+              )
+            )
           }
         }
       }

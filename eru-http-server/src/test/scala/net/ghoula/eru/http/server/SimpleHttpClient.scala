@@ -6,8 +6,8 @@ import scala.util.Using
 
 /** Simple synchronous HTTP client for testing the server.
   *
-  * Uses raw sockets instead of Java's HttpClient to have full control over headers,
-  * particularly the Connection header for testing keep-alive behavior.
+  * Uses raw sockets instead of Java's HttpClient to have full control over headers, particularly
+  * the Connection header for testing keep-alive behavior.
   */
 object SimpleHttpClient {
 
@@ -21,11 +21,21 @@ object SimpleHttpClient {
     sendRequest("GET", url, None, headers, connectionClose)
   }
 
-  def post(url: String, body: String, headers: Map[String, String] = Map.empty, connectionClose: Boolean = true): Response = {
+  def post(
+    url: String,
+    body: String,
+    headers: Map[String, String] = Map.empty,
+    connectionClose: Boolean = true
+  ): Response = {
     sendRequest("POST", url, Some(body), headers, connectionClose)
   }
 
-  def put(url: String, body: String, headers: Map[String, String] = Map.empty, connectionClose: Boolean = true): Response = {
+  def put(
+    url: String,
+    body: String,
+    headers: Map[String, String] = Map.empty,
+    connectionClose: Boolean = true
+  ): Response = {
     sendRequest("PUT", url, Some(body), headers, connectionClose)
   }
 

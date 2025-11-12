@@ -151,9 +151,9 @@ private[server] object NettyHttpServer {
 
   /** Channel handler that processes HTTP requests.
     *
-    * TODO: This currently uses unsafeRunSync() which blocks the Netty event loop.
-    * Once Eru provides unsafeRunAsync, this should be refactored to use async execution.
-    * See docs/ERU_ASYNC_REQUIREMENTS.md for details.
+    * TODO: This currently uses unsafeRunSync() which blocks the Netty event loop. Once Eru provides
+    * unsafeRunAsync, this should be refactored to use async execution. See
+    * docs/ERU_ASYNC_REQUIREMENTS.md for details.
     */
   private class RequestChannelHandler(handler: RequestHandler)(using @unused _runtime: EruRuntime)
       extends SimpleChannelInboundHandler[FullHttpRequest] {
@@ -188,15 +188,13 @@ private[server] object NettyHttpServer {
         case Result.Success(response) =>
           val nettyResponse = convertResponse(response, nettyRequest.protocolVersion(), keepAlive)
           val future = ctx.writeAndFlush(nettyResponse)
-          if !keepAlive then
-            future.addListener(ChannelFutureListener.CLOSE): Unit
+          if !keepAlive then future.addListener(ChannelFutureListener.CLOSE): Unit
 
         case Result.Failure(error) =>
           // Convert error to HTTP response
           val errorResponse = errorToResponse(error, nettyRequest.protocolVersion(), keepAlive)
           val future = ctx.writeAndFlush(errorResponse)
-          if !keepAlive then
-            future.addListener(ChannelFutureListener.CLOSE): Unit
+          if !keepAlive then future.addListener(ChannelFutureListener.CLOSE): Unit
       }
     }
 
@@ -255,7 +253,11 @@ private[server] object NettyHttpServer {
       }
     }
 
-    private def convertResponse(response: Response[Body], httpVersion: NettyHttpVersion, keepAlive: Boolean): FullHttpResponse = {
+    private def convertResponse(
+      response: Response[Body],
+      httpVersion: NettyHttpVersion,
+      keepAlive: Boolean
+    ): FullHttpResponse = {
       // Convert body to ByteBuf
       val content = response.body match {
         case Body.Empty => Unpooled.EMPTY_BUFFER
@@ -299,7 +301,11 @@ private[server] object NettyHttpServer {
       nettyResponse
     }
 
-    private def errorToResponse(error: HttpError, httpVersion: NettyHttpVersion, keepAlive: Boolean): FullHttpResponse = {
+    private def errorToResponse(
+      error: HttpError,
+      httpVersion: NettyHttpVersion,
+      keepAlive: Boolean
+    ): FullHttpResponse = {
       val (status, message) = error match {
         case HttpError.InvalidMethod(_) => (400, "Bad Request: Invalid HTTP method")
         case HttpError.InvalidUri(_) => (400, "Bad Request: Invalid URI")

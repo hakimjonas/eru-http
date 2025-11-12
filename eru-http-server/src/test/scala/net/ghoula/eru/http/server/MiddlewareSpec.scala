@@ -19,8 +19,7 @@ class MiddlewareSpec extends FunSuite {
   // ===== Middleware Composition Tests =====
 
   test("Middleware - identity middleware does nothing") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Hello")))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Hello")))
 
     val identityMiddleware: Middleware = identity
     val app = identityMiddleware.apply(handler)
@@ -38,23 +37,25 @@ class MiddlewareSpec extends FunSuite {
   test("Middleware - andThen composes middleware correctly") {
     var executionOrder = List.empty[String]
 
-    val middleware1: Middleware = handler => req =>
-      for {
-        _ <- Eru.effect { executionOrder = executionOrder :+ "m1-before" }
-          .mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
-        resp <- handler(req)
-        _ <- Eru.effect { executionOrder = executionOrder :+ "m1-after" }
-          .mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
-      } yield resp
+    val middleware1: Middleware = handler =>
+      req =>
+        for {
+          _ <- Eru.effect { executionOrder = executionOrder :+ "m1-before" }
+            .mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
+          resp <- handler(req)
+          _ <- Eru.effect { executionOrder = executionOrder :+ "m1-after" }
+            .mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
+        } yield resp
 
-    val middleware2: Middleware = handler => req =>
-      for {
-        _ <- Eru.effect { executionOrder = executionOrder :+ "m2-before" }
-          .mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
-        resp <- handler(req)
-        _ <- Eru.effect { executionOrder = executionOrder :+ "m2-after" }
-          .mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
-      } yield resp
+    val middleware2: Middleware = handler =>
+      req =>
+        for {
+          _ <- Eru.effect { executionOrder = executionOrder :+ "m2-before" }
+            .mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
+          resp <- handler(req)
+          _ <- Eru.effect { executionOrder = executionOrder :+ "m2-after" }
+            .mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
+        } yield resp
 
     val handler: RequestHandler = _ =>
       for {
@@ -79,14 +80,14 @@ class MiddlewareSpec extends FunSuite {
   test("Middleware - combine creates middleware stack") {
     var count = 0
 
-    val incrementer: Middleware = handler => req =>
-      for {
-        _ <- Eru.effect { count += 1 }.mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
-        resp <- handler(req)
-      } yield resp
+    val incrementer: Middleware = handler =>
+      req =>
+        for {
+          _ <- Eru.effect { count += 1 }.mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
+          resp <- handler(req)
+        } yield resp
 
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
 
     val app = Middleware.combine(incrementer, incrementer, incrementer).apply(handler)
 
@@ -101,8 +102,7 @@ class MiddlewareSpec extends FunSuite {
   test("Middleware - logging logs request and response") {
     var logs = List.empty[String]
 
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Hello")))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Hello")))
 
     val app = Middleware.logging(msg => logs = logs :+ msg).apply(handler)
 
@@ -116,8 +116,7 @@ class MiddlewareSpec extends FunSuite {
   test("Middleware - loggingSimple logs without error handling") {
     var logs = List.empty[String]
 
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.NotFound, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.NotFound, Headers.empty, Body.empty))
 
     val app = Middleware.loggingSimple(msg => logs = logs :+ msg).apply(handler)
 
@@ -131,8 +130,7 @@ class MiddlewareSpec extends FunSuite {
   // ===== CORS Middleware Tests =====
 
   test("Middleware - cors adds CORS headers to response") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
 
     val app = Middleware.cors().apply(handler)
 
@@ -145,8 +143,7 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - cors handles preflight OPTIONS request") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
 
     val corsConfig = CORSConfig(
       allowedOrigins = List("https://example.com"),
@@ -172,8 +169,7 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - corsPermissive allows all origins") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
 
     val app = Middleware.corsPermissive.apply(handler)
 
@@ -186,8 +182,7 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - CORS config with credentials") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
 
     val corsConfig = CORSConfig(
       allowedOrigins = List("https://example.com"),
@@ -205,8 +200,7 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - CORS config with max age") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
 
     val corsConfig = CORSConfig(maxAge = Some(3600))
 
@@ -229,11 +223,9 @@ class MiddlewareSpec extends FunSuite {
   // ===== Authentication Middleware Tests =====
 
   test("Middleware - auth allows authenticated requests") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Secret data")))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Secret data")))
 
-    val checkAuth: Request[Body] => Boolean = req =>
-      req.headers.getFirst("Authorization").exists(_.value == "secret")
+    val checkAuth: Request[Body] => Boolean = req => req.headers.getFirst("Authorization").exists(_.value == "secret")
 
     val app = Middleware.auth(checkAuth, UnauthorizedHandler(() => Middleware.defaultUnauthorized())).apply(handler)
 
@@ -252,11 +244,9 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - auth blocks unauthenticated requests") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Secret data")))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Secret data")))
 
-    val checkAuth: Request[Body] => Boolean = req =>
-      req.headers.getFirst("Authorization").exists(_.value == "secret")
+    val checkAuth: Request[Body] => Boolean = req => req.headers.getFirst("Authorization").exists(_.value == "secret")
 
     val app = Middleware.auth(checkAuth, UnauthorizedHandler(() => Middleware.defaultUnauthorized())).apply(handler)
 
@@ -267,12 +257,12 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - bearerAuth validates Bearer token") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Protected")))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Protected")))
 
     val validateToken: String => Boolean = token => token == "valid-token"
 
-    val app = Middleware.bearerAuth(validateToken, UnauthorizedHandler(() => Middleware.defaultUnauthorized())).apply(handler)
+    val app =
+      Middleware.bearerAuth(validateToken, UnauthorizedHandler(() => Middleware.defaultUnauthorized())).apply(handler)
 
     val request = Request
       .get(uri("http://localhost/"))
@@ -285,12 +275,12 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - bearerAuth blocks invalid Bearer token") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Protected")))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Protected")))
 
     val validateToken: String => Boolean = token => token == "valid-token"
 
-    val app = Middleware.bearerAuth(validateToken, UnauthorizedHandler(() => Middleware.defaultUnauthorized())).apply(handler)
+    val app =
+      Middleware.bearerAuth(validateToken, UnauthorizedHandler(() => Middleware.defaultUnauthorized())).apply(handler)
 
     val request = Request
       .get(uri("http://localhost/"))
@@ -303,12 +293,12 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - bearerAuth blocks requests without Bearer prefix") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Protected")))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Protected")))
 
     val validateToken: String => Boolean = _ => true
 
-    val app = Middleware.bearerAuth(validateToken, UnauthorizedHandler(() => Middleware.defaultUnauthorized())).apply(handler)
+    val app =
+      Middleware.bearerAuth(validateToken, UnauthorizedHandler(() => Middleware.defaultUnauthorized())).apply(handler)
 
     val request = Request
       .get(uri("http://localhost/"))
@@ -323,8 +313,7 @@ class MiddlewareSpec extends FunSuite {
   // ===== Request ID Middleware Tests =====
 
   test("Middleware - requestId adds unique ID to response") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
 
     val app = Middleware.requestId().apply(handler)
 
@@ -337,8 +326,7 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - requestId uses custom header name") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
 
     val app = Middleware.requestId("X-Trace-ID").apply(handler)
 
@@ -351,8 +339,7 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - requestId generates different IDs for each request") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
 
     val app = Middleware.requestId().apply(handler)
 
@@ -369,8 +356,7 @@ class MiddlewareSpec extends FunSuite {
   // ===== Error Handler Middleware Tests =====
 
   test("Middleware - errorHandler catches and transforms errors") {
-    val handler: RequestHandler = _ =>
-      Eru.fail(HttpError.InvalidRequest(InvalidRequest("Bad input", "RFC")))
+    val handler: RequestHandler = _ => Eru.fail(HttpError.InvalidRequest(InvalidRequest("Bad input", "RFC")))
 
     val handleError: HttpError => Response[Body] = {
       case HttpError.InvalidRequest(err) =>
@@ -392,8 +378,7 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - errorHandlerDefault converts InvalidRequest to 400") {
-    val handler: RequestHandler = _ =>
-      Eru.fail(HttpError.InvalidRequest(InvalidRequest("Invalid input", "RFC")))
+    val handler: RequestHandler = _ => Eru.fail(HttpError.InvalidRequest(InvalidRequest("Invalid input", "RFC")))
 
     val app = Middleware.errorHandlerDefault.apply(handler)
 
@@ -404,8 +389,7 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - errorHandlerDefault converts NetworkError to 500") {
-    val handler: RequestHandler = _ =>
-      Eru.fail(HttpError.NetworkError("Connection failed", None))
+    val handler: RequestHandler = _ => Eru.fail(HttpError.NetworkError("Connection failed", None))
 
     val app = Middleware.errorHandlerDefault.apply(handler)
 
@@ -427,8 +411,7 @@ class MiddlewareSpec extends FunSuite {
       } yield resp
     }
 
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
 
     val app = conditionalMiddleware.apply(handler)
 
@@ -455,8 +438,7 @@ class MiddlewareSpec extends FunSuite {
       } yield resp
     }
 
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
 
     val app = pathMiddleware.apply(handler)
 
@@ -483,8 +465,7 @@ class MiddlewareSpec extends FunSuite {
       } yield resp
     }
 
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.empty))
 
     val app = methodMiddleware.apply(handler)
 
@@ -538,11 +519,11 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - auth and CORS work together") {
-    val handler: RequestHandler = _ =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Protected resource")))
+    val handler: RequestHandler =
+      _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text("Protected resource")))
 
-    val checkAuth: Request[Body] => Boolean = req =>
-      req.headers.getFirst("Authorization").exists(_.value.startsWith("Bearer "))
+    val checkAuth: Request[Body] => Boolean =
+      req => req.headers.getFirst("Authorization").exists(_.value.startsWith("Bearer "))
 
     // Apply auth first, then CORS - this way CORS headers are added to all responses
     val app = Middleware
@@ -570,12 +551,10 @@ class MiddlewareSpec extends FunSuite {
   test("Middleware - error handler with logging") {
     var logs = List.empty[String]
 
-    val handler: RequestHandler = _ =>
-      Eru.fail(HttpError.InvalidRequest(InvalidRequest("Bad request", "RFC")))
+    val handler: RequestHandler = _ => Eru.fail(HttpError.InvalidRequest(InvalidRequest("Bad request", "RFC")))
 
     // Apply error handler first, then logging - this way logging sees the recovered response
-    val app = Middleware
-      .errorHandlerDefault
+    val app = Middleware.errorHandlerDefault
       .andThen(Middleware.logging(msg => logs = logs :+ msg))
       .apply(handler)
 
@@ -588,14 +567,15 @@ class MiddlewareSpec extends FunSuite {
   }
 
   test("Middleware - conditional auth for API routes only") {
-    val handler: RequestHandler = req =>
-      Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text(s"Path: ${req.uri.path}")))
+    val handler: RequestHandler =
+      req => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text(s"Path: ${req.uri.path}")))
 
-    val checkToken: Request[Body] => Boolean = req =>
-      req.headers.getFirst("Authorization").exists(_.value == "valid")
+    val checkToken: Request[Body] => Boolean = req => req.headers.getFirst("Authorization").exists(_.value == "valid")
 
     val app = Middleware
-      .when(_.uri.path.startsWith("/api"))(Middleware.auth(checkToken, UnauthorizedHandler(() => Middleware.defaultUnauthorized())))
+      .when(_.uri.path.startsWith("/api"))(
+        Middleware.auth(checkToken, UnauthorizedHandler(() => Middleware.defaultUnauthorized()))
+      )
       .apply(handler)
 
     // Public route should work without auth

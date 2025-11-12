@@ -5,8 +5,8 @@ import munit.FunSuite
 import scala.collection.mutable.ListBuffer
 
 import net.ghoula.eru.*
-import net.ghoula.eru.prelude.defaultRuntime
 import net.ghoula.eru.http.*
+import net.ghoula.eru.prelude.defaultRuntime
 
 import TestHelpers.*
 
@@ -292,7 +292,8 @@ class InterceptorSpec extends FunSuite {
     try {
       HttpClient
         .scoped(HttpClientConfig.default) { client =>
-          val interceptor = Interceptor.addHeader("X-First", "1")
+          val interceptor = Interceptor
+            .addHeader("X-First", "1")
             .andThen(Interceptor.addHeader("X-Second", "2"))
 
           val clientWithInterceptor = client.withRequestInterceptor(interceptor)
@@ -318,7 +319,8 @@ class InterceptorSpec extends FunSuite {
     try {
       HttpClient
         .scoped(HttpClientConfig.default) { client =>
-          val interceptor = Interceptor.addHeader("X-First", "1")
+          val interceptor = Interceptor
+            .addHeader("X-First", "1")
             .andThenAll(
               Interceptor.addHeader("X-Second", "2"),
               Interceptor.addHeader("X-Third", "3")
@@ -377,7 +379,8 @@ class InterceptorSpec extends FunSuite {
     try {
       HttpClient
         .scoped(HttpClientConfig.default) { client =>
-          val interceptor = Interceptor.logResponse(msg => logs += s"First: $msg")
+          val interceptor = Interceptor
+            .logResponse(msg => logs += s"First: $msg")
             .andThen(Interceptor.logResponse(msg => logs += s"Second: $msg"))
 
           val clientWithInterceptor = client.withResponseInterceptor(interceptor)
@@ -438,9 +441,11 @@ class InterceptorSpec extends FunSuite {
     val server = TestHttpServer.create(
       handler = (_, path) =>
         if path.contains("/error") then
-          TestHttpServer.ResponseConfig(status = io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERROR, body = "Error")
-        else
-          TestHttpServer.ResponseConfig(body = "OK")
+          TestHttpServer.ResponseConfig(
+            status = io.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SERVER_ERROR,
+            body = "Error"
+          )
+        else TestHttpServer.ResponseConfig(body = "OK")
     )
 
     val logs = ListBuffer.empty[String]
@@ -507,8 +512,7 @@ class InterceptorSpec extends FunSuite {
   test("Interceptor - error in interceptor propagates to caller") {
     val server = TestHttpServer.simple(body = "OK")
     try {
-      val failingInterceptor: RequestInterceptor = _ =>
-        Eru.fail(HttpError.NetworkError("Interceptor failed"))
+      val failingInterceptor: RequestInterceptor = _ => Eru.fail(HttpError.NetworkError("Interceptor failed"))
 
       val result = HttpClient.scoped(HttpClientConfig.default) { client =>
         val clientWithInterceptor = client.withRequestInterceptor(failingInterceptor)

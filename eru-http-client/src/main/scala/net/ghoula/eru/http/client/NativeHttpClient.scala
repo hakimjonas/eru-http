@@ -7,16 +7,16 @@ import javax.net.ssl.SSLContext
 import scala.annotation.unused
 
 import net.ghoula.eru.*
-import net.ghoula.eru.prelude.*
 import net.ghoula.eru.http.*
+import net.ghoula.eru.prelude.*
 
 /** Native HTTP client implementation using blocking NIO + Virtual Threads.
   *
   * This implementation demonstrates the power of Eru's Virtual Thread backend:
-  * - Each request runs on its own Virtual Thread
-  * - Blocking I/O is efficient (~10KB per thread vs ~2MB for OS threads)
-  * - Connection pooling with Eru Ref for structured concurrency
-  * - Simple, readable code with no event loops or callbacks
+  *   - Each request runs on its own Virtual Thread
+  *   - Blocking I/O is efficient (~10KB per thread vs ~2MB for OS threads)
+  *   - Connection pooling with Eru Ref for structured concurrency
+  *   - Simple, readable code with no event loops or callbacks
   *
   * Compare to NettyHttpClient: ~200 lines vs 402 lines (50% reduction)
   */
@@ -25,7 +25,8 @@ private[client] final class NativeHttpClient(
   sslContext: Option[SSLContext],
   requestInterceptors: List[RequestInterceptor] = List.empty,
   responseInterceptors: List[ResponseInterceptor] = List.empty
-)(using runtime: EruRuntime) extends HttpClient {
+)(using runtime: EruRuntime)
+    extends HttpClient {
 
   override def execute[A, B](
     request: Request[A]
@@ -48,8 +49,10 @@ private[client] final class NativeHttpClient(
 
       // Apply response interceptors
       responseAsBody: Response[Body] = response.copy(body = Body.Binary(response.body))
-      interceptedResponse <- responseInterceptors.foldLeft(Eru.succeed(responseAsBody): Eru[HttpError, Response[Body]]) {
-        (resp, interceptor) => resp.flatMap(interceptor)
+      interceptedResponse <- responseInterceptors.foldLeft(
+        Eru.succeed(responseAsBody): Eru[HttpError, Response[Body]]
+      ) { (resp, interceptor) =>
+        resp.flatMap(interceptor)
       }
 
       // Decode response body
@@ -72,8 +75,10 @@ private[client] final class NativeHttpClient(
 
       // Apply response interceptors
       responseAsBody: Response[Body] = response.copy(body = Body.Binary(response.body))
-      interceptedResponse <- responseInterceptors.foldLeft(Eru.succeed(responseAsBody): Eru[HttpError, Response[Body]]) {
-        (resp, interceptor) => resp.flatMap(interceptor)
+      interceptedResponse <- responseInterceptors.foldLeft(
+        Eru.succeed(responseAsBody): Eru[HttpError, Response[Body]]
+      ) { (resp, interceptor) =>
+        resp.flatMap(interceptor)
       }
 
       // Convert back to Response[Bytes]
@@ -98,11 +103,14 @@ private[client] final class NativeHttpClient(
       _ <- config.cookieJar match {
         case Some(jar) =>
           val setCookieHeaders = response.headers.get(HeaderNames.SetCookie).getOrElse(List.empty)
-          Eru.foreach(setCookieHeaders) { headerValue =>
-            Cookie.parseSetCookie(headerValue.value)
-              .mapError(HttpError.InvalidCookie.apply)
-              .flatMap(cookie => jar.add(request.uri, cookie))
-          }.map(_ => ())
+          Eru
+            .foreach(setCookieHeaders) { headerValue =>
+              Cookie
+                .parseSetCookie(headerValue.value)
+                .mapError(HttpError.InvalidCookie.apply)
+                .flatMap(cookie => jar.add(request.uri, cookie))
+            }
+            .map(_ => ())
         case None =>
           Eru.succeed(())
       }
@@ -119,10 +127,10 @@ private[client] final class NativeHttpClient(
   /** Execute a single HTTP request.
     *
     * Simple blocking approach:
-    * 1. Connect to server (blocks on VT - efficient!)
-    * 2. Write request (blocks on VT - efficient!)
-    * 3. Read response (blocks on VT - efficient!)
-    * 4. Close connection
+    *   1. Connect to server (blocks on VT - efficient!)
+    *   2. Write request (blocks on VT - efficient!)
+    *   3. Read response (blocks on VT - efficient!)
+    *   4. Close connection
     */
   private def executeRequest(
     host: String,
@@ -134,14 +142,15 @@ private[client] final class NativeHttpClient(
       socket <- connect(host, port)
 
       // Wrap with TLS if needed
-      secureSocket <- if request.uri.scheme.contains("https") then {
-        sslContext match {
-          case Some(ctx) => wrapWithTLS(socket, host, port, ctx)
-          case None => Eru.fail(HttpError.NetworkError("HTTPS requested but no SSL context configured", None))
+      secureSocket <-
+        if request.uri.scheme.contains("https") then {
+          sslContext match {
+            case Some(ctx) => wrapWithTLS(socket, host, port, ctx)
+            case None => Eru.fail(HttpError.NetworkError("HTTPS requested but no SSL context configured", None))
+          }
+        } else {
+          Eru.succeed(socket)
         }
-      } else {
-        Eru.succeed(socket)
-      }
 
       // Add cookies from jar
       requestWithCookies <- config.cookieJar match {
@@ -149,7 +158,8 @@ private[client] final class NativeHttpClient(
           jar.getCookies(request.uri).flatMap { cookies =>
             if cookies.nonEmpty then {
               val cookieHeader = cookies.map(_.toCookieHeader).mkString("; ")
-              request.headers.add(HeaderNames.Cookie, cookieHeader)
+              request.headers
+                .add(HeaderNames.Cookie, cookieHeader)
                 .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid cookie: $e", "RFC 6265")))
                 .map(newHeaders => request.copy(headers = newHeaders))
             } else {
@@ -160,28 +170,32 @@ private[client] final class NativeHttpClient(
       }
 
       // Add Content-Length header if not present and body is not empty
-      requestWithContentLength <- if !requestWithCookies.headers.contains(HeaderNames.ContentLength) then {
-        requestWithCookies.body match {
-          case Body.Empty => Eru.succeed(requestWithCookies)
-          case Body.Text(text, _, charset) =>
-            val contentLength = text.getBytes(charset.toJavaCharset).length
-            requestWithCookies.headers.add(HeaderNames.ContentLength, contentLength.toString)
-              .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: $e", "RFC 9110")))
-              .map(newHeaders => requestWithCookies.copy(headers = newHeaders))
-          case Body.Binary(bytes, _) =>
-            requestWithCookies.headers.add(HeaderNames.ContentLength, bytes.length.toString)
-              .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: $e", "RFC 9110")))
-              .map(newHeaders => requestWithCookies.copy(headers = newHeaders))
-          case Body.Stream(_, _, _) =>
-            // Don't set Content-Length for streams (would need Transfer-Encoding: chunked)
-            Eru.succeed(requestWithCookies)
+      requestWithContentLength <-
+        if !requestWithCookies.headers.contains(HeaderNames.ContentLength) then {
+          requestWithCookies.body match {
+            case Body.Empty => Eru.succeed(requestWithCookies)
+            case Body.Text(text, _, charset) =>
+              val contentLength = text.getBytes(charset.toJavaCharset).length
+              requestWithCookies.headers
+                .add(HeaderNames.ContentLength, contentLength.toString)
+                .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: $e", "RFC 9110")))
+                .map(newHeaders => requestWithCookies.copy(headers = newHeaders))
+            case Body.Binary(bytes, _) =>
+              requestWithCookies.headers
+                .add(HeaderNames.ContentLength, bytes.length.toString)
+                .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: $e", "RFC 9110")))
+                .map(newHeaders => requestWithCookies.copy(headers = newHeaders))
+            case Body.Stream(_, _, _) =>
+              // Don't set Content-Length for streams (would need Transfer-Encoding: chunked)
+              Eru.succeed(requestWithCookies)
+          }
+        } else {
+          Eru.succeed(requestWithCookies)
         }
-      } else {
-        Eru.succeed(requestWithCookies)
-      }
 
       // Write request with timeout
-      _ <- HttpWriter.writeRequest(secureSocket, requestWithContentLength)
+      _ <- HttpWriter
+        .writeRequest(secureSocket, requestWithContentLength)
         .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
         .mapError {
           case _: TimeoutException => HttpError.TimeoutError(s"Write timeout after ${config.requestTimeout}")
@@ -190,7 +204,8 @@ private[client] final class NativeHttpClient(
         }
 
       // Read response with timeout
-      response <- HttpParser.parseResponse(secureSocket)
+      response <- HttpParser
+        .parseResponse(secureSocket)
         .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
         .mapError {
           case _: TimeoutException => HttpError.TimeoutError(s"Read timeout after ${config.requestTimeout}")
@@ -212,20 +227,18 @@ private[client] final class NativeHttpClient(
   private def connect(host: String, port: Int): Eru[HttpError, SocketChannel] = {
     val connectEffect = Eru.effect {
       val socket = SocketChannel.open()
-      socket.configureBlocking(true)  // Blocking is GOOD on Virtual Threads!
+      socket.configureBlocking(true) // Blocking is GOOD on Virtual Threads!
       socket.connect(new InetSocketAddress(host, port))
       socket
     }
 
-    connectEffect
-      .attempt
-      .flatMap {
-        case Result.Success(socket) => Eru.succeed(socket)
-        case Result.Failure(e: java.net.ConnectException) =>
-          Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
-        case Result.Failure(e) =>
-          Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
-      }
+    connectEffect.attempt.flatMap {
+      case Result.Success(socket) => Eru.succeed(socket)
+      case Result.Failure(e: java.net.ConnectException) =>
+        Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
+      case Result.Failure(e) =>
+        Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
+    }
       .timeout(java.time.Duration.ofMillis(config.connectTimeout.toMillis))
       .mapError {
         case _: TimeoutException =>
@@ -329,18 +342,19 @@ private[client] object NativeHttpClient {
   /** Create a native HTTP client.
     *
     * This is dramatically simpler than NettyHttpClient.create:
-    * - No EventLoopGroup to manage
-    * - No Bootstrap configuration
-    * - No ChannelInitializer setup
-    * - Just pure Eru effects + blocking NIO
+    *   - No EventLoopGroup to manage
+    *   - No Bootstrap configuration
+    *   - No ChannelInitializer setup
+    *   - Just pure Eru effects + blocking NIO
     */
   def create(config: HttpClientConfig)(using runtime: EruRuntime): Eru[HttpError, NativeHttpClient] =
     for {
-      sslContext <- if config.tlsConfig.enabled then {
-        createSSLContext(config.tlsConfig).map(Some(_))
-      } else {
-        Eru.succeed(None)
-      }
+      sslContext <-
+        if config.tlsConfig.enabled then {
+          createSSLContext(config.tlsConfig).map(Some(_))
+        } else {
+          Eru.succeed(None)
+        }
     } yield new NativeHttpClient(config, sslContext)
 
   /** Create SSL context from TLS configuration

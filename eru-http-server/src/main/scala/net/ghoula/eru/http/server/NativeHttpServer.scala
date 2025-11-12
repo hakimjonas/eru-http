@@ -2,22 +2,22 @@ package net.ghoula.eru.http.server
 
 import java.net.InetSocketAddress
 import java.nio.channels.{ServerSocketChannel, SocketChannel}
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
 import scala.annotation.unused
 
 import net.ghoula.eru.*
-import net.ghoula.eru.prelude.*
 import net.ghoula.eru.http.*
+import net.ghoula.eru.prelude.*
 
 /** Native HTTP server implementation using blocking NIO + Virtual Threads.
   *
   * This implementation demonstrates the power of Eru's Virtual Thread backend:
-  * - Each connection runs on its own Virtual Thread via .fork
-  * - Blocking I/O is efficient (~10KB per thread vs ~2MB for OS threads)
-  * - Structured concurrency ensures automatic cleanup
-  * - Simple, readable code with no event loops or callbacks
+  *   - Each connection runs on its own Virtual Thread via .fork
+  *   - Blocking I/O is efficient (~10KB per thread vs ~2MB for OS threads)
+  *   - Structured concurrency ensures automatic cleanup
+  *   - Simple, readable code with no event loops or callbacks
   *
   * Compare to NettyHttpServer: ~150 lines vs 332 lines (55% reduction)
   */
@@ -26,13 +26,14 @@ private[server] final class NativeHttpServer(
   handler: RequestHandler,
   serverSocket: ServerSocketChannel,
   sslContext: Option[SSLContext]
-)(using runtime: EruRuntime) extends HttpServer {
+)(using runtime: EruRuntime)
+    extends HttpServer {
 
   private val running = new AtomicBoolean(true)
 
   def start: Eru[HttpError, ServerAddress] = for {
     _ <- Eru.effect {
-      serverSocket.configureBlocking(true)  // Blocking is GOOD on Virtual Threads!
+      serverSocket.configureBlocking(true) // Blocking is GOOD on Virtual Threads!
       serverSocket.bind(new InetSocketAddress(config.host, config.port), config.backlog)
     }.mapError(e => HttpError.NetworkError(s"Failed to bind server: ${e.getMessage}", Some(e)))
 
@@ -52,8 +53,8 @@ private[server] final class NativeHttpServer(
 
   /** Accept loop - runs forever accepting connections.
     *
-    * Each accept() blocks on a Virtual Thread, which is efficient!
-    * Each accepted connection is handled on its own Virtual Thread via .fork
+    * Each accept() blocks on a Virtual Thread, which is efficient! Each accepted connection is
+    * handled on its own Virtual Thread via .fork
     */
   private def acceptLoop: Eru[HttpError, Unit] =
     Eru.effect {
@@ -61,7 +62,7 @@ private[server] final class NativeHttpServer(
         try {
           // This blocks waiting for a connection - on Virtual Thread, it's efficient!
           val clientSocket = serverSocket.accept()
-          clientSocket.configureBlocking(true)  // Client socket also uses blocking mode
+          clientSocket.configureBlocking(true) // Client socket also uses blocking mode
 
           // Handle each client on its own Virtual Thread
           // Structured concurrency ensures cleanup when parent scope exits
@@ -79,8 +80,8 @@ private[server] final class NativeHttpServer(
 
   /** Handle a single client connection.
     *
-    * This runs on its own Virtual Thread, so blocking I/O is efficient.
-    * The entire request-response cycle is a simple for-comprehension!
+    * This runs on its own Virtual Thread, so blocking I/O is efficient. The entire request-response
+    * cycle is a simple for-comprehension!
     */
   private def handleClient(socket: SocketChannel): Eru[HttpError, Unit] = {
     val clientEffect = for {
@@ -104,20 +105,21 @@ private[server] final class NativeHttpServer(
   /** Handle requests in a loop for HTTP keep-alive support.
     *
     * Continues handling requests on the same socket until:
-    * - Connection: close header is received
-    * - An error occurs
-    * - Socket is closed by client
+    *   - Connection: close header is received
+    *   - An error occurs
+    *   - Socket is closed by client
     */
   private def handleRequestLoop(socket: SocketChannel): Eru[HttpError, Unit] = {
     def loop(): Eru[HttpError, Boolean] = {
       val requestEffect = for {
         // Parse request with timeout (blocking read - efficient on VT!)
         // If no request arrives within idle timeout, exit the loop
-        requestResult <- HttpParser.parseRequest(socket)
+        requestResult <- HttpParser
+          .parseRequest(socket)
           .timeout(java.time.Duration.ofMillis(config.idleTimeout.toMillis))
           .mapError {
             case _: TimeoutException => HttpError.NetworkError("Keep-alive timeout", None)
-            case e: HttpError => e  // Pass through HttpError from parser
+            case e: HttpError => e // Pass through HttpError from parser
             case e: Throwable => HttpError.NetworkError(s"Parse error: ${e.getMessage}", Some(e))
           }
           .attempt
@@ -155,9 +157,9 @@ private[server] final class NativeHttpServer(
       } yield shouldContinue
 
       requestEffect.attempt.flatMap {
-        case Result.Success(true) => loop()  // Continue for next request
-        case Result.Success(false) => Eru.succeed(false)  // Connection: close, exit cleanly
-        case Result.Failure(_) => Eru.succeed(false)  // Error, exit cleanly
+        case Result.Success(true) => loop() // Continue for next request
+        case Result.Success(false) => Eru.succeed(false) // Connection: close, exit cleanly
+        case Result.Failure(_) => Eru.succeed(false) // Error, exit cleanly
       }
     }
 
@@ -170,14 +172,12 @@ private[server] final class NativeHttpServer(
     // Check response Connection header first
     val responseConnection = response.headers.getFirst(HeaderNames.Connection).map(_.value.toLowerCase)
 
-    if responseConnection.contains("close") then
-      false
+    if responseConnection.contains("close") then false
     else {
       // Check request Connection header
       val requestConnection = request.headers.getFirst(HeaderNames.Connection).map(_.value.toLowerCase)
 
-      if requestConnection.contains("close") then
-        false
+      if requestConnection.contains("close") then false
       else {
         // Default for HTTP/1.1 is keep-alive
         request.version == HttpVersion.HTTP_1_1 || responseConnection.contains("keep-alive")
@@ -187,8 +187,8 @@ private[server] final class NativeHttpServer(
 
   /** Add Connection and Content-Length headers to response if not present.
     *
-    * HTTP/1.1 requires either Content-Length or Connection: close for message framing.
-    * This ensures we send proper headers for keep-alive support.
+    * HTTP/1.1 requires either Content-Length or Connection: close for message framing. This ensures
+    * we send proper headers for keep-alive support.
     *
     * If the client requests Connection: close, we echo it back in the response.
     */
@@ -202,7 +202,7 @@ private[server] final class NativeHttpServer(
         case Body.Empty => 0
         case Body.Text(text, _, charset) => text.getBytes(charset.toJavaCharset).length
         case Body.Binary(bytes, _) => bytes.length
-        case Body.Stream(_, _, _) => -1  // Cannot determine length for streams
+        case Body.Stream(_, _, _) => -1 // Cannot determine length for streams
       }
 
       if bodyLength >= 0 then {
@@ -211,7 +211,7 @@ private[server] final class NativeHttpServer(
           case Result.Failure(_) => response
         }
       } else {
-        response  // Streams will need Connection: close or chunked encoding
+        response // Streams will need Connection: close or chunked encoding
       }
     }
 
@@ -232,8 +232,8 @@ private[server] final class NativeHttpServer(
 
   /** Wrap socket with TLS/SSL.
     *
-    * Uses SSLEngine with blocking mode. The handshake blocks the Virtual Thread,
-    * which is efficient since VTs are cheap.
+    * Uses SSLEngine with blocking mode. The handshake blocks the Virtual Thread, which is efficient
+    * since VTs are cheap.
     */
   private def wrapWithTLS(socket: SocketChannel, @unused _ctx: SSLContext): Eru[HttpError, SocketChannel] =
     Eru.effect {
@@ -305,11 +305,11 @@ private[server] object NativeHttpServer {
   /** Create a native HTTP server.
     *
     * This is dramatically simpler than NettyHttpServer.create:
-    * - No EventLoopGroups to manage
-    * - No Bootstrap configuration
-    * - No ChannelPipeline setup
-    * - No ChannelHandlers
-    * - Just pure Eru effects + blocking NIO
+    *   - No EventLoopGroups to manage
+    *   - No Bootstrap configuration
+    *   - No ChannelPipeline setup
+    *   - No ChannelHandlers
+    *   - Just pure Eru effects + blocking NIO
     */
   def create(
     config: HttpServerConfig,

@@ -1,8 +1,9 @@
 package net.ghoula.eru.http.server
 
+import java.util.UUID
+
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
-import java.util.UUID
 
 /** Middleware transforms a request handler into another request handler.
   *
@@ -39,6 +40,7 @@ trait UnauthorizedHandler {
 }
 
 object UnauthorizedHandler {
+
   /** Create an UnauthorizedHandler from a function. */
   def apply(f: () => Eru[HttpError, Response[Body]]): UnauthorizedHandler =
     new UnauthorizedHandler {
@@ -48,6 +50,7 @@ object UnauthorizedHandler {
 
 /** Extension methods for composing middleware. */
 extension (middleware: Middleware) {
+
   /** Compose this middleware with another.
     *
     * The resulting middleware applies this middleware first, then the next. This creates an "onion"
@@ -82,25 +85,27 @@ object Middleware {
     *   val app = Middleware.logging(println).apply(handler)
     *   }}}
     */
-  inline def logging(log: String => Unit): Middleware = handler => req =>
-    for {
-      _ <- Eru
-        .effect(log(s"→ ${req.method} ${req.uri.path}"))
-        .mapError(e => HttpError.NetworkError(s"Logging failed: ${e.getMessage}", Some(e)))
-      resp <- handler(req)
-      _ <- Eru
-        .effect(log(s"← ${resp.status} (${resp.body.contentLength.getOrElse(0)} bytes)"))
-        .mapError(e => HttpError.NetworkError(s"Logging failed: ${e.getMessage}", Some(e)))
-    } yield resp
+  inline def logging(log: String => Unit): Middleware = handler =>
+    req =>
+      for {
+        _ <- Eru
+          .effect(log(s"→ ${req.method} ${req.uri.path}"))
+          .mapError(e => HttpError.NetworkError(s"Logging failed: ${e.getMessage}", Some(e)))
+        resp <- handler(req)
+        _ <- Eru
+          .effect(log(s"← ${resp.status} (${resp.body.contentLength.getOrElse(0)} bytes)"))
+          .mapError(e => HttpError.NetworkError(s"Logging failed: ${e.getMessage}", Some(e)))
+      } yield resp
 
   /** Simple logging without error handling (fails silently). */
-  inline def loggingSimple(log: String => Unit): Middleware = handler => req => {
-    Eru.effect(log(s"${req.method} ${req.uri.path}")).attempt.unsafeRunSync()
-    handler(req).flatMap { resp =>
-      Eru.effect(log(s"  -> ${resp.status}")).attempt.unsafeRunSync()
-      Eru.succeed(resp)
+  inline def loggingSimple(log: String => Unit): Middleware = handler =>
+    req => {
+      Eru.effect(log(s"${req.method} ${req.uri.path}")).attempt.unsafeRunSync()
+      handler(req).flatMap { resp =>
+        Eru.effect(log(s"  -> ${resp.status}")).attempt.unsafeRunSync()
+        Eru.succeed(resp)
+      }
     }
-  }
 
   /** CORS (Cross-Origin Resource Sharing) middleware.
     *
@@ -117,10 +122,11 @@ object Middleware {
     *   val app = Middleware.cors(corsConfig).apply(handler)
     *   }}}
     */
-  inline def cors(config: CORSConfig = CORSConfig.default): Middleware = handler => req =>
-    // Handle preflight OPTIONS request
-    if req.method == Method.OPTIONS then corsPreflightResponse(config)
-    else handler(req).flatMap(addCorsHeaders(_, config))
+  inline def cors(config: CORSConfig = CORSConfig.default): Middleware = handler =>
+    req =>
+      // Handle preflight OPTIONS request
+      if req.method == Method.OPTIONS then corsPreflightResponse(config)
+      else handler(req).flatMap(addCorsHeaders(_, config))
 
   /** CORS middleware allowing all origins (permissive, for development). */
   inline def corsPermissive: Middleware =
@@ -188,10 +194,11 @@ object Middleware {
   def auth(
     verify: Request[Body] => Boolean,
     unauthorized: UnauthorizedHandler
-  ): Middleware = handler => req => {
-    if verify(req) then handler(req)
-    else unauthorized()
-  }
+  ): Middleware = handler =>
+    req => {
+      if verify(req) then handler(req)
+      else unauthorized()
+    }
 
   /** Bearer token authentication middleware.
     *
@@ -208,20 +215,21 @@ object Middleware {
   def bearerAuth(
     verify: String => Boolean,
     unauthorized: UnauthorizedHandler
-  ): Middleware = handler => req => {
-    val token = req.headers
-      .getFirst("Authorization")
-      .flatMap { header =>
-        val value = header.value
-        if value.startsWith("Bearer ") then Some(value.drop(7))
-        else None
-      }
+  ): Middleware = handler =>
+    req => {
+      val token = req.headers
+        .getFirst("Authorization")
+        .flatMap { header =>
+          val value = header.value
+          if value.startsWith("Bearer ") then Some(value.drop(7))
+          else None
+        }
 
-    token match {
-      case Some(t) if verify(t) => handler(req)
-      case _                    => unauthorized()
+      token match {
+        case Some(t) if verify(t) => handler(req)
+        case _ => unauthorized()
+      }
     }
-  }
 
   /** Create a default 401 Unauthorized response.
     *
@@ -244,15 +252,16 @@ object Middleware {
     *   val app = Middleware.requestId().apply(handler)
     *   }}}
     */
-  inline def requestId(headerName: String = "X-Request-ID"): Middleware = handler => req => {
-    val requestId = UUID.randomUUID().toString
-    handler(req).flatMap { resp =>
-      resp.setHeader(headerName, requestId).mapError {
-        case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
-        case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+  inline def requestId(headerName: String = "X-Request-ID"): Middleware = handler =>
+    req => {
+      val requestId = UUID.randomUUID().toString
+      handler(req).flatMap { resp =>
+        resp.setHeader(headerName, requestId).mapError {
+          case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+          case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+        }
       }
     }
-  }
 
   /** Error handling middleware that catches handler errors.
     *
@@ -270,8 +279,8 @@ object Middleware {
     *   val app = Middleware.errorHandler(handleError).apply(handler)
     *   }}}
     */
-  inline def errorHandler(handle: HttpError => Response[Body]): Middleware = handler => req =>
-    handler(req).recover(error => handle(error))
+  inline def errorHandler(handle: HttpError => Response[Body]): Middleware = handler =>
+    req => handler(req).recover(error => handle(error))
 
   /** Default error handler that returns appropriate status codes. */
   inline def errorHandlerDefault: Middleware =
@@ -303,9 +312,10 @@ object Middleware {
     *   }
     *   }}}
     */
-  inline def when(condition: Request[Body] => Boolean)(middleware: Middleware): Middleware = handler => req =>
-    if condition(req) then middleware(handler)(req)
-    else handler(req)
+  inline def when(condition: Request[Body] => Boolean)(middleware: Middleware): Middleware = handler =>
+    req =>
+      if condition(req) then middleware(handler)(req)
+      else handler(req)
 
   /** Apply middleware only to specific paths. */
   inline def forPath(pathPrefix: String)(middleware: Middleware): Middleware =
