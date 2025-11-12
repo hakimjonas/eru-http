@@ -23,6 +23,7 @@ object SimpleHttpClient {
       .newBuilder()
       .uri(URI.create(url))
       .GET()
+      .header("Connection", "close")  // Close connection after response to avoid keep-alive timeout in tests
 
     headers.foreach { case (name, value) =>
       builder.header(name, value)
@@ -43,6 +44,7 @@ object SimpleHttpClient {
       .newBuilder()
       .uri(URI.create(url))
       .POST(BodyPublishers.ofString(body))
+      .header("Connection", "close")  // Close connection after response to avoid keep-alive timeout in tests
 
     headers.foreach { case (name, value) =>
       builder.header(name, value)
@@ -63,6 +65,7 @@ object SimpleHttpClient {
       .newBuilder()
       .uri(URI.create(url))
       .PUT(BodyPublishers.ofString(body))
+      .header("Connection", "close")  // Close connection after response to avoid keep-alive timeout in tests
 
     headers.foreach { case (name, value) =>
       builder.header(name, value)
@@ -83,6 +86,7 @@ object SimpleHttpClient {
       .newBuilder()
       .uri(URI.create(url))
       .DELETE()
+      .header("Connection", "close")  // Close connection after response to avoid keep-alive timeout in tests
 
     headers.foreach { case (name, value) =>
       builder.header(name, value)
