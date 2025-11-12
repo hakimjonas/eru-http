@@ -42,7 +42,15 @@ object SimpleHttpClient {
     val uri = URI.create(url)
     val host = uri.getHost
     val port = if uri.getPort == -1 then 80 else uri.getPort
-    val path = if uri.getPath.isEmpty then "/" else uri.getPath
+
+    // Build path with query string
+    val pathWithQuery = {
+      val p = if uri.getPath.isEmpty then "/" else uri.getPath
+      Option(uri.getQuery) match {
+        case Some(q) => s"$p?$q"
+        case None => p
+      }
+    }
 
     Using.resource(new Socket(host, port)) { socket =>
       val out = socket.getOutputStream
@@ -52,7 +60,7 @@ object SimpleHttpClient {
       val request = new StringBuilder
 
       // Request line
-      request.append(s"$method $path HTTP/1.1\r\n")
+      request.append(s"$method $pathWithQuery HTTP/1.1\r\n")
 
       // Host header (required for HTTP/1.1)
       request.append(s"Host: $host:$port\r\n")
