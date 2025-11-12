@@ -193,9 +193,9 @@ private[client] final class NativeHttpClient(
     */
   private def wrapWithTLS(
     socket: SocketChannel,
-    host: String,
-    port: Int,
-    ctx: SSLContext
+    _host: String,
+    _port: Int,
+    _ctx: SSLContext
   ): Eru[HttpError, SocketChannel] =
     Eru.effect {
       // TODO: Implement SSL wrapping
@@ -298,7 +298,7 @@ private[client] object NativeHttpClient {
 
   /** Create SSL context from TLS configuration
     */
-  private def createSSLContext(tlsConfig: TlsConfig): Eru[HttpError, SSLContext] =
+  private def createSSLContext(_tlsConfig: TlsConfig): Eru[HttpError, SSLContext] =
     Eru.effect {
       // TODO: Implement proper SSL context creation
       // For now, return default context

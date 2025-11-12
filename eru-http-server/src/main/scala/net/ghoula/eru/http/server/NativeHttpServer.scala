@@ -138,7 +138,7 @@ private[server] final class NativeHttpServer(
     * Uses SSLEngine with blocking mode. The handshake blocks the Virtual Thread,
     * which is efficient since VTs are cheap.
     */
-  private def wrapWithTLS(socket: SocketChannel, ctx: SSLContext): Eru[HttpError, SocketChannel] =
+  private def wrapWithTLS(socket: SocketChannel, _ctx: SSLContext): Eru[HttpError, SocketChannel] =
     Eru.effect {
       // TODO: Implement SSL wrapping
       // For now, return unwrapped socket
@@ -234,7 +234,7 @@ private[server] object NativeHttpServer {
 
   /** Create SSL context from TLS configuration
     */
-  private def createSSLContext(tlsConfig: TlsConfig): Eru[HttpError, SSLContext] =
+  private def createSSLContext(_tlsConfig: TlsConfig): Eru[HttpError, SSLContext] =
     Eru.effect {
       // TODO: Implement proper SSL context creation
       // For now, return default context
