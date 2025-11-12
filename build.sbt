@@ -17,6 +17,10 @@ ThisBuild / developers := List(
   )
 )
 
+// Skip Scala Native configuration - eru-http only targets JVM (and eventually JS)
+// Eru publishes separate artifacts (eruCoreJVM, eruCoreNative) so we only depend on JVM
+// Note: The 'clang' not found error is expected and harmless - we don't use Scala Native
+
 // Compiler options
 ThisBuild / scalacOptions ++= Seq(
   "-encoding",
