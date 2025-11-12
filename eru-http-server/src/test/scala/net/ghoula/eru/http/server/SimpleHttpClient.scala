@@ -123,8 +123,7 @@ object SimpleHttpClient {
     }
 
     // Read body
-    val bodyBuilder = new StringBuilder
-    contentLength match {
+    val body = contentLength match {
       case Some(length) if length > 0 =>
         // Read exact number of bytes specified by Content-Length
         val buffer = new Array[Char](length)
@@ -136,10 +135,11 @@ object SimpleHttpClient {
           }
           totalRead += read
         }
-        bodyBuilder.append(buffer, 0, totalRead)
+        new String(buffer, 0, totalRead)
 
       case _ if connectionClose =>
         // No Content-Length but Connection: close - read until EOF
+        val bodyBuilder = new StringBuilder
         var line = Option(in.readLine())
         while line.isDefined do {
           bodyBuilder.append(line.get)
@@ -148,16 +148,17 @@ object SimpleHttpClient {
             bodyBuilder.append("\n")
           }
         }
+        bodyBuilder.toString
 
       case _ =>
         // No body to read
-        ()
+        ""
     }
 
     Response(
       status = status,
       headers = headersMap.toMap,
-      body = bodyBuilder.toString
+      body = body
     )
   }
 }
