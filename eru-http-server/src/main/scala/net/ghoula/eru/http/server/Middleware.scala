@@ -30,6 +30,9 @@ import java.util.UUID
   */
 type Middleware = RequestHandler => RequestHandler
 
+/** Type alias for unauthorized response functions to avoid cyclic references. */
+private type UnauthorizedResponse = () => Eru[HttpError, Response[Body]]
+
 /** Extension methods for composing middleware. */
 extension (middleware: Middleware) {
   /** Compose this middleware with another.
@@ -56,9 +59,6 @@ extension (middleware: Middleware) {
 
 /** Built-in middleware for common use cases. */
 object Middleware {
-
-  /** Type alias for unauthorized response functions to avoid cyclic references. */
-  type UnauthorizedResponse = () => Eru[HttpError, Response[Body]]
 
   /** Logging middleware that logs requests and responses.
     *
