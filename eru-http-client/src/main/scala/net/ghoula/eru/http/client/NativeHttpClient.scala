@@ -209,19 +209,29 @@ private[client] final class NativeHttpClient(
 
   /** Connect to server (blocking)
     */
-  private def connect(host: String, port: Int): Eru[HttpError, SocketChannel] =
-    Eru.effect {
+  private def connect(host: String, port: Int): Eru[HttpError, SocketChannel] = {
+    val connectEffect = Eru.effect {
       val socket = SocketChannel.open()
       socket.configureBlocking(true)  // Blocking is GOOD on Virtual Threads!
       socket.connect(new InetSocketAddress(host, port))
       socket
-    }.timeout(java.time.Duration.ofMillis(config.connectTimeout.toMillis))
-      .mapError {
-        case _: TimeoutException =>
-          HttpError.ConnectionError(s"Connection timeout after ${config.connectTimeout}", None)
-        case e: Throwable =>
-          HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e))
+    }
+
+    connectEffect
+      .attempt
+      .timeout(java.time.Duration.ofMillis(config.connectTimeout.toMillis))
+      .flatMap {
+        case Result.Success(socket) => Eru.succeed(socket)
+        case Result.Failure(e) => e match {
+          case _: TimeoutException =>
+            Eru.fail(HttpError.ConnectionError(s"Connection timeout after ${config.connectTimeout}", None))
+          case _: java.net.ConnectException =>
+            Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
+          case _ =>
+            Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
+        }
       }
+  }
 
   /** Wrap socket with TLS/SSL
     */
