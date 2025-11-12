@@ -128,12 +128,12 @@ private[server] final class NativeHttpServer(
               } catch {
                 case _: Exception => () // Best effort
               }
-            }
+            }.mapError(e => HttpError.NetworkError(s"Error handling failed: ${e.getMessage}", Some(e)))
           case Right(throwable: Throwable) =>
             Eru.effect {
               System.err.println(s"Unexpected error handling client: ${throwable.getMessage}")
               throwable.printStackTrace()
-            }
+            }.mapError(e => HttpError.NetworkError(s"Error logging failed: ${e.getMessage}", Some(e)))
         }
     }
   }
