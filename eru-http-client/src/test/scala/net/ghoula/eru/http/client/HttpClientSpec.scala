@@ -6,6 +6,7 @@ import munit.FunSuite
 import scala.concurrent.duration.*
 
 import net.ghoula.eru.*
+import net.ghoula.eru.prelude.defaultRuntime
 import net.ghoula.eru.http.*
 
 import TestHelpers.*
