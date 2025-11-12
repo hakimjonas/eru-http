@@ -90,29 +90,8 @@ private[server] final class NativeHttpServer(
         case None => Eru.succeed(socket)
       }
 
-      // Parse request (blocking read - efficient on VT!)
-      request <- HttpParser.parseRequest(secureSocket)
-
-      // Apply idle timeout and handle errors
-      handlerResult <- handler(request)
-        .timeout(java.time.Duration.ofMillis(config.idleTimeout.toMillis))
-        .mapError {
-          case _: TimeoutException =>
-            HttpError.TimeoutError(s"Request handler timeout after ${config.idleTimeout}")
-          case e: HttpError => e
-          case e: Throwable =>
-            HttpError.NetworkError(s"Handler error: ${e.getMessage}", Some(e))
-        }
-        .attempt
-
-      // Convert handler result to response (either success or error response)
-      response = handlerResult match {
-        case Result.Success(resp) => addConnectionHeader(resp)
-        case Result.Failure(httpError: HttpError) => addConnectionHeader(errorToResponse(httpError))
-      }
-
-      // Write response (blocking write - efficient on VT!)
-      _ <- HttpWriter.writeResponse(secureSocket, response)
+      // Handle requests in a loop for keep-alive
+      _ <- handleRequestLoop(secureSocket)
 
     } yield ()
 
@@ -120,6 +99,76 @@ private[server] final class NativeHttpServer(
     val cleanup = Eru.effect { socket.close() }.attempt.map(_ => ())
 
     clientEffect.attempt.flatMap { _ => cleanup }
+  }
+
+  /** Handle requests in a loop for HTTP keep-alive support.
+    *
+    * Continues handling requests on the same socket until:
+    * - Connection: close header is received
+    * - An error occurs
+    * - Socket is closed by client
+    */
+  private def handleRequestLoop(socket: SocketChannel): Eru[HttpError, Unit] = {
+    def loop(): Eru[HttpError, Boolean] = {
+      val requestEffect = for {
+        // Parse request (blocking read - efficient on VT!)
+        requestResult <- HttpParser.parseRequest(socket).attempt
+
+        // If parsing fails (socket closed, timeout, etc.), exit loop
+        request <- requestResult match {
+          case Result.Success(req) => Eru.succeed(req)
+          case Result.Failure(_) => Eru.fail(HttpError.NetworkError("Connection closed", None))
+        }
+
+        // Apply idle timeout and handle errors
+        handlerResult <- handler(request)
+          .timeout(java.time.Duration.ofMillis(config.idleTimeout.toMillis))
+          .mapError {
+            case _: TimeoutException =>
+              HttpError.TimeoutError(s"Request handler timeout after ${config.idleTimeout}")
+            case e: HttpError => e
+            case e: Throwable =>
+              HttpError.NetworkError(s"Handler error: ${e.getMessage}", Some(e))
+          }
+          .attempt
+
+        // Convert handler result to response (either success or error response)
+        response = handlerResult match {
+          case Result.Success(resp) => addConnectionHeader(resp)
+          case Result.Failure(httpError: HttpError) => addConnectionHeader(errorToResponse(httpError))
+        }
+
+        // Write response (blocking write - efficient on VT!)
+        _ <- HttpWriter.writeResponse(socket, response)
+
+        // Check if we should continue the loop (keep-alive)
+        shouldContinue = shouldKeepAlive(request, response)
+
+      } yield shouldContinue
+
+      requestEffect.attempt.flatMap {
+        case Result.Success(true) => loop()  // Continue for next request
+        case Result.Success(false) => Eru.succeed(false)  // Connection: close, exit cleanly
+        case Result.Failure(_) => Eru.succeed(false)  // Error, exit cleanly
+      }
+    }
+
+    loop().map(_ => ())
+  }
+
+  /** Check if connection should be kept alive based on request/response headers.
+    */
+  private def shouldKeepAlive(request: Request[Body], response: Response[Body]): Boolean = {
+    // Check response Connection header first
+    val responseConnection = response.headers.getFirst(HeaderNames.Connection).map(_.value.toLowerCase)
+    if responseConnection.contains("close") then return false
+
+    // Check request Connection header
+    val requestConnection = request.headers.getFirst(HeaderNames.Connection).map(_.value.toLowerCase)
+    if requestConnection.contains("close") then return false
+
+    // Default for HTTP/1.1 is keep-alive
+    request.version == HttpVersion.HTTP_1_1 || responseConnection.contains("keep-alive")
   }
 
   /** Add Connection: keep-alive header to response if not present
