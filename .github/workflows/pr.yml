@@ -42,9 +42,15 @@ jobs:
 
     - name: Check formatting
       run: sbt scalafmtCheckAll scalafmtSbtCheck
+      env:
+        GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
 
     - name: Build documentation
       run: sbt doc
+      env:
+        GITHUB_TOKEN: ${{ secrets.PACKAGES_READ_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
       continue-on-error: true
 
   size-check:
