@@ -3,6 +3,7 @@ package net.ghoula.eru.http.server
 import java.net.InetSocketAddress
 import java.nio.channels.{ServerSocketChannel, SocketChannel}
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.TimeoutException
 import javax.net.ssl.{SSLContext, SSLEngine}
 
 import net.ghoula.eru.*
@@ -110,7 +111,10 @@ private[server] final class NativeHttpServer(
     // Ensure socket is closed even if errors occur
     val cleanup = Eru.effect { socket.close() }.attempt.map(_ => ())
 
-    clientEffect.ensuring(cleanup).attempt.flatMap {
+    (for {
+      result <- clientEffect.attempt
+      _ <- cleanup
+    } yield result).flatMap {
       case Result.Success(_) =>
         Eru.unit
       case Result.Failure(Left(httpError)) =>
@@ -173,7 +177,11 @@ private[server] final class NativeHttpServer(
     val headers = Headers.empty
       .add(HeaderNames.ContentType, contentType)
       .flatMap(_.add(HeaderNames.ContentLength, message.getBytes.length.toString))
-      .catchAll(_ => Eru.succeed(Headers.empty))
+      .attempt
+      .map {
+        case Result.Success(h) => h
+        case Result.Failure(_) => Headers.empty
+      }
       .unsafeRunSync()
 
     Response(

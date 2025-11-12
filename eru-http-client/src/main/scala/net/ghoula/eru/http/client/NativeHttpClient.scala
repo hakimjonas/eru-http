@@ -3,6 +3,7 @@ package net.ghoula.eru.http.client
 import java.net.InetSocketAddress
 import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.TimeoutException
 import javax.net.ssl.{SSLContext, SSLEngine}
 
 import net.ghoula.eru.*
