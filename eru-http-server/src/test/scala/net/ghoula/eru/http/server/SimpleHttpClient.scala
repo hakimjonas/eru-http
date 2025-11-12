@@ -1,6 +1,6 @@
 package net.ghoula.eru.http.server
 
-import java.io.{BufferedReader, InputStreamReader, PrintWriter}
+import java.io.{BufferedReader, InputStreamReader}
 import java.net.{Socket, URI}
 import scala.util.Using
 
