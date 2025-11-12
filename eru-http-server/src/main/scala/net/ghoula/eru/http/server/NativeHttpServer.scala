@@ -111,33 +111,26 @@ private[server] final class NativeHttpServer(
     // Ensure socket is closed even if errors occur
     val cleanup = Eru.effect { socket.close() }.attempt.map(_ => ())
 
-    (for {
-      result <- clientEffect.attempt
-      _ <- cleanup
-    } yield result).flatMap {
-      case Result.Success(_) =>
-        Eru.unit
-      case Result.Failure(error) =>
-        error match {
-          case httpError: HttpError =>
-            // Log error and send error response if possible
-            Eru.effect {
-              try {
-                val errorResponse = errorToResponse(httpError)
-                HttpWriter.writeResponse(socket, errorResponse).unsafeRunSync()
-              } catch {
-                case _: Exception => () // Best effort
-              }
-            }.mapError(e => HttpError.NetworkError(s"Error handling failed: ${e.getMessage}", Some(e)))
-          case _ =>
-            // Must be a Throwable from the union type HttpError | Throwable
-            val throwable = error.asInstanceOf[Throwable]
-            Eru.effect {
-              System.err.println(s"Unexpected error handling client: ${throwable.getMessage}")
-              throwable.printStackTrace()
-            }.mapError(e => HttpError.NetworkError(s"Error logging failed: ${e.getMessage}", Some(e)))
+    clientEffect
+      .attempt
+      .flatMap { result =>
+        cleanup.flatMap { _ =>
+          result match {
+            case Result.Success(_) =>
+              Eru.unit
+            case Result.Failure(httpError: HttpError) =>
+              // Log error and send error response if possible
+              Eru.effect {
+                try {
+                  val errorResponse = errorToResponse(httpError)
+                  HttpWriter.writeResponse(socket, errorResponse).unsafeRunSync()
+                } catch {
+                  case _: Exception => () // Best effort
+                }
+              }.mapError(e => HttpError.NetworkError(s"Error handling failed: ${e.getMessage}", Some(e)))
+          }
         }
-    }
+      }
   }
 
   /** Wrap socket with TLS/SSL.
