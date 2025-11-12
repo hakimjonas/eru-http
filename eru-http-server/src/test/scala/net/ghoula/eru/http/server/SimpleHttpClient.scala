@@ -1,16 +1,15 @@
 package net.ghoula.eru.http.server
 
-import java.net.URI
-import java.net.http.HttpRequest.BodyPublishers
-import java.net.http.HttpResponse.BodyHandlers
-import java.net.http.{HttpClient as JHttpClient, HttpRequest}
-import scala.jdk.CollectionConverters.*
+import java.io.{BufferedReader, InputStreamReader, PrintWriter}
+import java.net.{Socket, URI}
+import scala.util.Using
 
 /** Simple synchronous HTTP client for testing the server.
+  *
+  * Uses raw sockets instead of Java's HttpClient to have full control over headers,
+  * particularly the Connection header for testing keep-alive behavior.
   */
 object SimpleHttpClient {
-
-  private val client = JHttpClient.newHttpClient()
 
   case class Response(
     status: Int,
@@ -19,86 +18,117 @@ object SimpleHttpClient {
   )
 
   def get(url: String, headers: Map[String, String] = Map.empty): Response = {
-    val builder = HttpRequest
-      .newBuilder()
-      .uri(URI.create(url))
-      .GET()
-      .header("Connection", "close")  // Close connection after response to avoid keep-alive timeout in tests
-
-    headers.foreach { case (name, value) =>
-      builder.header(name, value)
-    }
-
-    val request = builder.build()
-    val response = client.send(request, BodyHandlers.ofString())
-
-    Response(
-      status = response.statusCode(),
-      headers = response.headers().map().asScala.map { case (k, v) => (k, v.asScala.head) }.toMap,
-      body = response.body()
-    )
+    sendRequest("GET", url, None, headers)
   }
 
   def post(url: String, body: String, headers: Map[String, String] = Map.empty): Response = {
-    val builder = HttpRequest
-      .newBuilder()
-      .uri(URI.create(url))
-      .POST(BodyPublishers.ofString(body))
-      .header("Connection", "close")  // Close connection after response to avoid keep-alive timeout in tests
-
-    headers.foreach { case (name, value) =>
-      builder.header(name, value)
-    }
-
-    val request = builder.build()
-    val response = client.send(request, BodyHandlers.ofString())
-
-    Response(
-      status = response.statusCode(),
-      headers = response.headers().map().asScala.map { case (k, v) => (k, v.asScala.head) }.toMap,
-      body = response.body()
-    )
+    sendRequest("POST", url, Some(body), headers)
   }
 
   def put(url: String, body: String, headers: Map[String, String] = Map.empty): Response = {
-    val builder = HttpRequest
-      .newBuilder()
-      .uri(URI.create(url))
-      .PUT(BodyPublishers.ofString(body))
-      .header("Connection", "close")  // Close connection after response to avoid keep-alive timeout in tests
-
-    headers.foreach { case (name, value) =>
-      builder.header(name, value)
-    }
-
-    val request = builder.build()
-    val response = client.send(request, BodyHandlers.ofString())
-
-    Response(
-      status = response.statusCode(),
-      headers = response.headers().map().asScala.map { case (k, v) => (k, v.asScala.head) }.toMap,
-      body = response.body()
-    )
+    sendRequest("PUT", url, Some(body), headers)
   }
 
   def delete(url: String, headers: Map[String, String] = Map.empty): Response = {
-    val builder = HttpRequest
-      .newBuilder()
-      .uri(URI.create(url))
-      .DELETE()
-      .header("Connection", "close")  // Close connection after response to avoid keep-alive timeout in tests
+    sendRequest("DELETE", url, None, headers)
+  }
 
-    headers.foreach { case (name, value) =>
-      builder.header(name, value)
+  private def sendRequest(
+    method: String,
+    url: String,
+    body: Option[String],
+    headers: Map[String, String]
+  ): Response = {
+    val uri = URI.create(url)
+    val host = uri.getHost
+    val port = if uri.getPort == -1 then 80 else uri.getPort
+    val path = if uri.getPath.isEmpty then "/" else uri.getPath
+
+    Using.resource(new Socket(host, port)) { socket =>
+      val out = new PrintWriter(socket.getOutputStream, true)
+      val in = new BufferedReader(new InputStreamReader(socket.getInputStream))
+
+      // Send request line
+      out.println(s"$method $path HTTP/1.1")
+
+      // Send Host header (required for HTTP/1.1)
+      out.println(s"Host: $host:$port")
+
+      // Send Connection: close to avoid keep-alive timeout in tests
+      out.println("Connection: close")
+
+      // Send custom headers
+      headers.foreach { case (name, value) =>
+        out.println(s"$name: $value")
+      }
+
+      // Send Content-Length if body present
+      body.foreach { b =>
+        out.println(s"Content-Length: ${b.getBytes.length}")
+      }
+
+      // End headers
+      out.println()
+
+      // Send body if present
+      body.foreach { b =>
+        out.print(b)
+        out.flush()
+      }
+
+      // Read response
+      parseResponse(in)
+    }
+  }
+
+  private def parseResponse(in: BufferedReader): Response = {
+    // Read status line
+    val statusLine = in.readLine()
+    if statusLine == null then {
+      throw new RuntimeException("Empty response from server")
     }
 
-    val request = builder.build()
-    val response = client.send(request, BodyHandlers.ofString())
+    val statusParts = statusLine.split(" ", 3)
+    val status = statusParts(1).toInt
+
+    // Read headers
+    val headersMap = scala.collection.mutable.Map[String, String]()
+    var line = in.readLine()
+    var contentLength = 0
+
+    while line != null && line.nonEmpty do {
+      val colonIdx = line.indexOf(':')
+      if colonIdx > 0 then {
+        val name = line.substring(0, colonIdx).trim.toLowerCase
+        val value = line.substring(colonIdx + 1).trim
+        headersMap(name) = value
+
+        if name == "content-length" then {
+          contentLength = value.toInt
+        }
+      }
+      line = in.readLine()
+    }
+
+    // Read body
+    val bodyBuilder = new StringBuilder
+    if contentLength > 0 then {
+      val buffer = new Array[Char](contentLength)
+      var totalRead = 0
+      while totalRead < contentLength do {
+        val read = in.read(buffer, totalRead, contentLength - totalRead)
+        if read == -1 then {
+          throw new RuntimeException("Connection closed before reading full body")
+        }
+        totalRead += read
+      }
+      bodyBuilder.append(buffer, 0, totalRead)
+    }
 
     Response(
-      status = response.statusCode(),
-      headers = response.headers().map().asScala.map { case (k, v) => (k, v.asScala.head) }.toMap,
-      body = response.body()
+      status = status,
+      headers = headersMap.toMap,
+      body = bodyBuilder.toString
     )
   }
 }
