@@ -91,7 +91,7 @@ lazy val coreJVM = (project in file("eru-http-core/jvm"))
     Compile / unmanagedSourceDirectories += baseDirectory.value / ".." / "shared" / "src" / "main" / "scala",
     Test / unmanagedSourceDirectories += baseDirectory.value / ".." / "shared" / "src" / "test" / "scala",
     libraryDependencies ++= Seq(
-      "net.ghoula" %% "valar-core" % "0.5.0",
+      "net.ghoula" % "valar-core_3" % "0.5.0",
       brotli4j
     )
   )
