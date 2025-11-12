@@ -159,8 +159,29 @@ private[client] final class NativeHttpClient(
         case None => Eru.succeed(request)
       }
 
+      // Add Content-Length header if not present and body is not empty
+      requestWithContentLength <- if !requestWithCookies.headers.contains(HeaderNames.ContentLength) then {
+        requestWithCookies.body match {
+          case Body.Empty => Eru.succeed(requestWithCookies)
+          case Body.Text(text, _, charset) =>
+            val contentLength = text.getBytes(charset.toJavaCharset).length
+            requestWithCookies.headers.add(HeaderNames.ContentLength, contentLength.toString)
+              .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: $e", "RFC 9110")))
+              .map(newHeaders => requestWithCookies.copy(headers = newHeaders))
+          case Body.Binary(bytes, _) =>
+            requestWithCookies.headers.add(HeaderNames.ContentLength, bytes.length.toString)
+              .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: $e", "RFC 9110")))
+              .map(newHeaders => requestWithCookies.copy(headers = newHeaders))
+          case Body.Stream(_, _, _) =>
+            // Don't set Content-Length for streams (would need Transfer-Encoding: chunked)
+            Eru.succeed(requestWithCookies)
+        }
+      } else {
+        Eru.succeed(requestWithCookies)
+      }
+
       // Write request with timeout
-      _ <- HttpWriter.writeRequest(secureSocket, requestWithCookies)
+      _ <- HttpWriter.writeRequest(secureSocket, requestWithContentLength)
         .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
         .mapError {
           case _: TimeoutException => HttpError.TimeoutError(s"Write timeout after ${config.requestTimeout}")
