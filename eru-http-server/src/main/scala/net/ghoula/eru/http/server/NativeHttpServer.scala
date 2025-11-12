@@ -185,14 +185,41 @@ private[server] final class NativeHttpServer(
     }
   }
 
-  /** Add Connection: keep-alive header to response if not present
+  /** Add Connection and Content-Length headers to response if not present.
+    *
+    * HTTP/1.1 requires either Content-Length or Connection: close for message framing.
+    * This ensures we send proper headers for keep-alive support.
     */
   private def addConnectionHeader(response: Response[Body]): Response[Body] = {
-    if response.headers.contains(HeaderNames.Connection) then response
-    else {
-      response.headers.add(HeaderNames.Connection, "keep-alive").attempt.unsafeRunSync() match {
-        case Result.Success(newHeaders) => response.copy(headers = newHeaders)
-        case Result.Failure(_) => response  // If adding header fails, just return original response
+    // First, ensure Content-Length is set if there's a body
+    val withContentLength = if response.headers.contains(HeaderNames.ContentLength) then {
+      response
+    } else {
+      // Calculate content length based on body type
+      val bodyLength = response.body match {
+        case Body.Empty => 0
+        case Body.Text(text, _, charset) => text.getBytes(charset.toJavaCharset).length
+        case Body.Binary(bytes, _) => bytes.length
+        case Body.Stream(_, _, _) => -1  // Cannot determine length for streams
+      }
+
+      if bodyLength >= 0 then {
+        response.headers.add(HeaderNames.ContentLength, bodyLength.toString).attempt.unsafeRunSync() match {
+          case Result.Success(newHeaders) => response.copy(headers = newHeaders)
+          case Result.Failure(_) => response
+        }
+      } else {
+        response  // Streams will need Connection: close or chunked encoding
+      }
+    }
+
+    // Then add Connection: keep-alive if not present
+    if withContentLength.headers.contains(HeaderNames.Connection) then {
+      withContentLength
+    } else {
+      withContentLength.headers.add(HeaderNames.Connection, "keep-alive").attempt.unsafeRunSync() match {
+        case Result.Success(newHeaders) => withContentLength.copy(headers = newHeaders)
+        case Result.Failure(_) => withContentLength
       }
     }
   }
