@@ -40,7 +40,7 @@ trait UnauthorizedHandler {
 
 object UnauthorizedHandler {
   /** Create an UnauthorizedHandler from a function. */
-  inline def apply(f: () => Eru[HttpError, Response[Body]]): UnauthorizedHandler =
+  def apply(f: () => Eru[HttpError, Response[Body]]): UnauthorizedHandler =
     new UnauthorizedHandler {
       def apply(): Eru[HttpError, Response[Body]] = f()
     }
