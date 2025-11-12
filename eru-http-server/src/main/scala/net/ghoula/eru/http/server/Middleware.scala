@@ -30,8 +30,21 @@ import java.util.UUID
   */
 type Middleware = RequestHandler => RequestHandler
 
-/** Type alias for unauthorized response functions to avoid cyclic references. */
-private type UnauthorizedResponse = () => Eru[HttpError, Response[Body]]
+/** Handler for unauthorized requests.
+  *
+  * Using a trait instead of function type to avoid cyclic references during initialization.
+  */
+trait UnauthorizedHandler {
+  def apply(): Eru[HttpError, Response[Body]]
+}
+
+object UnauthorizedHandler {
+  /** Create an UnauthorizedHandler from a function. */
+  inline def apply(f: () => Eru[HttpError, Response[Body]]): UnauthorizedHandler =
+    new UnauthorizedHandler {
+      def apply(): Eru[HttpError, Response[Body]] = f()
+    }
+}
 
 /** Extension methods for composing middleware. */
 extension (middleware: Middleware) {
@@ -174,7 +187,7 @@ object Middleware {
     */
   def auth(
     verify: Request[Body] => Boolean,
-    unauthorized: UnauthorizedResponse
+    unauthorized: UnauthorizedHandler
   ): Middleware = handler => req => {
     if verify(req) then handler(req)
     else unauthorized()
@@ -194,7 +207,7 @@ object Middleware {
     */
   def bearerAuth(
     verify: String => Boolean,
-    unauthorized: UnauthorizedResponse
+    unauthorized: UnauthorizedHandler
   ): Middleware = handler => req => {
     val token = req.headers
       .getFirst("Authorization")
