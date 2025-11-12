@@ -48,9 +48,15 @@ jobs:
 
     - name: Compile
       run: sbt compile
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
 
     - name: Run tests
       run: sbt test
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
 
     - name: Check formatting
       if: runner.os == 'Linux'
