@@ -4,6 +4,7 @@ import java.net.InetSocketAddress
 import java.nio.channels.SocketChannel
 import java.util.concurrent.TimeoutException
 import javax.net.ssl.SSLContext
+import scala.annotation.unused
 
 import net.ghoula.eru.*
 import net.ghoula.eru.prelude.*
@@ -193,9 +194,9 @@ private[client] final class NativeHttpClient(
     */
   private def wrapWithTLS(
     socket: SocketChannel,
-    _host: String,
-    _port: Int,
-    _ctx: SSLContext
+    @unused _host: String,
+    @unused _port: Int,
+    @unused _ctx: SSLContext
   ): Eru[HttpError, SocketChannel] =
     Eru.effect {
       // TODO: Implement SSL wrapping
@@ -298,7 +299,7 @@ private[client] object NativeHttpClient {
 
   /** Create SSL context from TLS configuration
     */
-  private def createSSLContext(_tlsConfig: TlsConfig): Eru[HttpError, SSLContext] =
+  private def createSSLContext(@unused _tlsConfig: TlsConfig): Eru[HttpError, SSLContext] =
     Eru.effect {
       // TODO: Implement proper SSL context creation
       // For now, return default context

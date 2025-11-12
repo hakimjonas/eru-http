@@ -14,6 +14,7 @@ import io.netty.util.CharsetUtil
 
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import scala.annotation.unused
 
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
@@ -154,7 +155,7 @@ private[server] object NettyHttpServer {
     * Once Eru provides unsafeRunAsync, this should be refactored to use async execution.
     * See docs/ERU_ASYNC_REQUIREMENTS.md for details.
     */
-  private class RequestChannelHandler(handler: RequestHandler)(using _runtime: EruRuntime)
+  private class RequestChannelHandler(handler: RequestHandler)(using @unused _runtime: EruRuntime)
       extends SimpleChannelInboundHandler[FullHttpRequest] {
 
     override def channelRead0(ctx: ChannelHandlerContext, nettyRequest: FullHttpRequest): Unit = {
