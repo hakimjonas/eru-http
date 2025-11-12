@@ -63,7 +63,7 @@ private[server] final class NativeHttpServer(
 
           // Handle each client on its own Virtual Thread
           // Structured concurrency ensures cleanup when parent scope exits
-          handleClient(clientSocket).fork.unsafeRunSync()
+          handleClient(clientSocket).fork.unsafeRunSync(): Unit
         } catch {
           case _: java.nio.channels.AsynchronousCloseException =>
             // Server socket was closed, exit loop
@@ -93,7 +93,7 @@ private[server] final class NativeHttpServer(
 
       // Apply idle timeout
       response <- handler(request)
-        .timeout(config.idleTimeout)
+        .timeout(java.time.Duration.ofMillis(config.idleTimeout.toMillis))
         .mapError {
           case _: TimeoutException =>
             HttpError.TimeoutError(s"Request handler timeout after ${config.idleTimeout}")
@@ -110,7 +110,7 @@ private[server] final class NativeHttpServer(
     // Ensure socket is closed even if errors occur
     val cleanup = Eru.effect { socket.close() }.attempt.map(_ => ())
 
-    clientEffect.guarantee(cleanup).attempt.flatMap {
+    clientEffect.ensuring(cleanup).attempt.flatMap {
       case Result.Success(_) =>
         Eru.unit
       case Result.Failure(Left(httpError)) =>
@@ -170,11 +170,15 @@ private[server] final class NativeHttpServer(
     val body = Body.Text(message, None, Charset.UTF8)
     val contentType = "text/plain; charset=utf-8"
 
+    val headers = Headers.empty
+      .add(HeaderNames.ContentType, contentType)
+      .flatMap(_.add(HeaderNames.ContentLength, message.getBytes.length.toString))
+      .catchAll(_ => Eru.succeed(Headers.empty))
+      .unsafeRunSync()
+
     Response(
       status = status,
-      headers = Headers.empty
-        .add(HeaderNames.ContentType, contentType).fold(_ => Headers.empty, identity)
-        .add(HeaderNames.ContentLength, message.getBytes.length.toString).fold(_ => Headers.empty, identity),
+      headers = headers,
       body = body
     )
   }

@@ -148,7 +148,7 @@ private[client] final class NativeHttpClient(
 
       // Write request with timeout
       _ <- HttpWriter.writeRequest(secureSocket, requestWithCookies)
-        .timeout(config.requestTimeout)
+        .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
         .mapError {
           case _: TimeoutException => HttpError.TimeoutError(s"Write timeout after ${config.requestTimeout}")
           case e: HttpError => e
@@ -157,7 +157,7 @@ private[client] final class NativeHttpClient(
 
       // Read response with timeout
       response <- HttpParser.parseResponse(secureSocket)
-        .timeout(config.requestTimeout)
+        .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
         .mapError {
           case _: TimeoutException => HttpError.TimeoutError(s"Read timeout after ${config.requestTimeout}")
           case e: HttpError => e
@@ -181,7 +181,7 @@ private[client] final class NativeHttpClient(
       socket.configureBlocking(true)  // Blocking is GOOD on Virtual Threads!
       socket.connect(new InetSocketAddress(host, port))
       socket
-    }.timeout(config.connectTimeout)
+    }.timeout(java.time.Duration.ofMillis(config.connectTimeout.toMillis))
       .mapError {
         case _: TimeoutException =>
           HttpError.ConnectionError(s"Connection timeout after ${config.connectTimeout}", None)
