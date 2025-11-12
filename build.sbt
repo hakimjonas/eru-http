@@ -72,12 +72,14 @@ ThisBuild / resolvers ++= {
 
 ThisBuild / credentials ++= {
   if (sys.env.contains("GITHUB_TOKEN") && sys.env("GITHUB_TOKEN").nonEmpty) {
-    Seq(Credentials(
-      "GitHub Package Registry",
-      "maven.pkg.github.com",
-      sys.env.getOrElse("GITHUB_ACTOR", "hakimjonas"),
-      sys.env("GITHUB_TOKEN")
-    ))
+    Seq(
+      Credentials(
+        "GitHub Package Registry",
+        "maven.pkg.github.com",
+        sys.env.getOrElse("GITHUB_ACTOR", "hakimjonas"),
+        sys.env("GITHUB_TOKEN")
+      )
+    )
   } else {
     Seq.empty
   }
