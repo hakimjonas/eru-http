@@ -171,10 +171,10 @@ object Middleware {
     */
   def auth(
     verify: Request[Body] => Boolean,
-    unauthorized: => Eru[HttpError, Response[Body]]
+    unauthorized: () => Eru[HttpError, Response[Body]]
   ): Middleware = handler => req => {
     if verify(req) then handler(req)
-    else unauthorized
+    else unauthorized()
   }
 
   /** Bearer token authentication middleware.
@@ -191,7 +191,7 @@ object Middleware {
     */
   def bearerAuth(
     verify: String => Boolean,
-    unauthorized: => Eru[HttpError, Response[Body]]
+    unauthorized: () => Eru[HttpError, Response[Body]]
   ): Middleware = handler => req => {
     val token = req.headers
       .getFirst("Authorization")
@@ -203,7 +203,7 @@ object Middleware {
 
     token match {
       case Some(t) if verify(t) => handler(req)
-      case _                    => unauthorized
+      case _                    => unauthorized()
     }
   }
 

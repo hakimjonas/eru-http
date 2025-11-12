@@ -235,7 +235,7 @@ class MiddlewareSpec extends FunSuite {
     val checkAuth: Request[Body] => Boolean = req =>
       req.headers.getFirst("Authorization").exists(_.value == "secret")
 
-    val app = Middleware.auth(checkAuth, Middleware.defaultUnauthorized()).apply(handler)
+    val app = Middleware.auth(checkAuth, ()\ =>\ () => Middleware.defaultUnauthorized()).apply(handler)
 
     val request = Request
       .get(uri("http://localhost/"))
@@ -258,7 +258,7 @@ class MiddlewareSpec extends FunSuite {
     val checkAuth: Request[Body] => Boolean = req =>
       req.headers.getFirst("Authorization").exists(_.value == "secret")
 
-    val app = Middleware.auth(checkAuth, Middleware.defaultUnauthorized()).apply(handler)
+    val app = Middleware.auth(checkAuth, ()\ =>\ () => Middleware.defaultUnauthorized()).apply(handler)
 
     val request = Request.get(uri("http://localhost/"))
     val response = app(request).assertSuccess
@@ -272,7 +272,7 @@ class MiddlewareSpec extends FunSuite {
 
     val validateToken: String => Boolean = token => token == "valid-token"
 
-    val app = Middleware.bearerAuth(validateToken, Middleware.defaultUnauthorized()).apply(handler)
+    val app = Middleware.bearerAuth(validateToken, ()\ =>\ () => Middleware.defaultUnauthorized()).apply(handler)
 
     val request = Request
       .get(uri("http://localhost/"))
@@ -290,7 +290,7 @@ class MiddlewareSpec extends FunSuite {
 
     val validateToken: String => Boolean = token => token == "valid-token"
 
-    val app = Middleware.bearerAuth(validateToken, Middleware.defaultUnauthorized()).apply(handler)
+    val app = Middleware.bearerAuth(validateToken, ()\ =>\ () => Middleware.defaultUnauthorized()).apply(handler)
 
     val request = Request
       .get(uri("http://localhost/"))
@@ -308,7 +308,7 @@ class MiddlewareSpec extends FunSuite {
 
     val validateToken: String => Boolean = _ => true
 
-    val app = Middleware.bearerAuth(validateToken, Middleware.defaultUnauthorized()).apply(handler)
+    val app = Middleware.bearerAuth(validateToken, ()\ =>\ () => Middleware.defaultUnauthorized()).apply(handler)
 
     val request = Request
       .get(uri("http://localhost/"))
@@ -546,7 +546,7 @@ class MiddlewareSpec extends FunSuite {
 
     // Apply auth first, then CORS - this way CORS headers are added to all responses
     val app = Middleware
-      .auth(checkAuth, Middleware.defaultUnauthorized())
+      .auth(checkAuth, ()\ =>\ () => Middleware.defaultUnauthorized())
       .andThen(Middleware.cors())
       .apply(handler)
 
@@ -595,7 +595,7 @@ class MiddlewareSpec extends FunSuite {
       req.headers.getFirst("Authorization").exists(_.value == "valid")
 
     val app = Middleware
-      .when(_.uri.path.startsWith("/api"))(Middleware.auth(checkToken, Middleware.defaultUnauthorized()))
+      .when(_.uri.path.startsWith("/api"))(Middleware.auth(checkToken, ()\ =>\ () => Middleware.defaultUnauthorized()))
       .apply(handler)
 
     // Public route should work without auth
