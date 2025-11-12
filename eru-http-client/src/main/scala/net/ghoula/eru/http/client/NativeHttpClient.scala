@@ -77,7 +77,7 @@ private[client] final class NativeHttpClient(
       }
 
       // Convert back to Response[Bytes]
-      responseBytes = interceptedResponse.copy(body = convertBodyToBytes(interceptedResponse))
+      responseBytes = convertBodyToBytes(interceptedResponse)
     } yield responseBytes
 
   /** Internal request execution with redirect handling

@@ -169,14 +169,9 @@ object Middleware {
     *   val app = Middleware.auth(checkToken).apply(handler)
     *   }}}
     */
-  inline def auth(
+  def auth(
     verify: Request[Body] => Boolean,
-    unauthorized: => Eru[HttpError, Response[Body]] = {
-      Response.unauthorized("Bearer", Body.empty).mapError {
-        case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
-        case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
-      }
-    }
+    unauthorized: => Eru[HttpError, Response[Body]]
   ): Middleware = handler => req => {
     if verify(req) then handler(req)
     else unauthorized
@@ -194,14 +189,9 @@ object Middleware {
     *   val app = Middleware.bearerAuth(validateToken).apply(handler)
     *   }}}
     */
-  inline def bearerAuth(
+  def bearerAuth(
     verify: String => Boolean,
-    unauthorized: => Eru[HttpError, Response[Body]] = {
-      Response.unauthorized("Bearer", Body.empty).mapError {
-        case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
-        case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
-      }
-    }
+    unauthorized: => Eru[HttpError, Response[Body]]
   ): Middleware = handler => req => {
     val token = req.headers
       .getFirst("Authorization")
@@ -216,6 +206,16 @@ object Middleware {
       case _                    => unauthorized
     }
   }
+
+  /** Create a default 401 Unauthorized response.
+    *
+    * Helper for auth middleware that creates a standard unauthorized response.
+    */
+  def defaultUnauthorized(challenge: String = "Bearer"): Eru[HttpError, Response[Body]] =
+    Response.unauthorized(challenge, Body.empty).mapError {
+      case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+      case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+    }
 
   /** Add request ID to all requests and responses.
     *
