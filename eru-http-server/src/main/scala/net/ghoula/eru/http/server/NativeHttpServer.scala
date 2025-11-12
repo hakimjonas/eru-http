@@ -161,14 +161,20 @@ private[server] final class NativeHttpServer(
   private def shouldKeepAlive(request: Request[Body], response: Response[Body]): Boolean = {
     // Check response Connection header first
     val responseConnection = response.headers.getFirst(HeaderNames.Connection).map(_.value.toLowerCase)
-    if responseConnection.contains("close") then return false
 
-    // Check request Connection header
-    val requestConnection = request.headers.getFirst(HeaderNames.Connection).map(_.value.toLowerCase)
-    if requestConnection.contains("close") then return false
+    if responseConnection.contains("close") then
+      false
+    else {
+      // Check request Connection header
+      val requestConnection = request.headers.getFirst(HeaderNames.Connection).map(_.value.toLowerCase)
 
-    // Default for HTTP/1.1 is keep-alive
-    request.version == HttpVersion.HTTP_1_1 || responseConnection.contains("keep-alive")
+      if requestConnection.contains("close") then
+        false
+      else {
+        // Default for HTTP/1.1 is keep-alive
+        request.version == HttpVersion.HTTP_1_1 || responseConnection.contains("keep-alive")
+      }
+    }
   }
 
   /** Add Connection: keep-alive header to response if not present
