@@ -20,7 +20,8 @@ final class TestHttpServer private (
 ) {
 
   def shutdown(): Unit = {
-    server.shutdown.unsafeRunSync()(using runtime)
+    given EruRuntime = runtime
+    server.shutdown.unsafeRunSync()
     ()
   }
 
