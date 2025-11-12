@@ -17,27 +17,28 @@ object SimpleHttpClient {
     body: String
   )
 
-  def get(url: String, headers: Map[String, String] = Map.empty): Response = {
-    sendRequest("GET", url, None, headers)
+  def get(url: String, headers: Map[String, String] = Map.empty, connectionClose: Boolean = true): Response = {
+    sendRequest("GET", url, None, headers, connectionClose)
   }
 
-  def post(url: String, body: String, headers: Map[String, String] = Map.empty): Response = {
-    sendRequest("POST", url, Some(body), headers)
+  def post(url: String, body: String, headers: Map[String, String] = Map.empty, connectionClose: Boolean = true): Response = {
+    sendRequest("POST", url, Some(body), headers, connectionClose)
   }
 
-  def put(url: String, body: String, headers: Map[String, String] = Map.empty): Response = {
-    sendRequest("PUT", url, Some(body), headers)
+  def put(url: String, body: String, headers: Map[String, String] = Map.empty, connectionClose: Boolean = true): Response = {
+    sendRequest("PUT", url, Some(body), headers, connectionClose)
   }
 
-  def delete(url: String, headers: Map[String, String] = Map.empty): Response = {
-    sendRequest("DELETE", url, None, headers)
+  def delete(url: String, headers: Map[String, String] = Map.empty, connectionClose: Boolean = true): Response = {
+    sendRequest("DELETE", url, None, headers, connectionClose)
   }
 
   private def sendRequest(
     method: String,
     url: String,
     body: Option[String],
-    headers: Map[String, String]
+    headers: Map[String, String],
+    connectionClose: Boolean
   ): Response = {
     val uri = URI.create(url)
     val host = uri.getHost
@@ -65,8 +66,12 @@ object SimpleHttpClient {
       // Host header (required for HTTP/1.1)
       request.append(s"Host: $host:$port\r\n")
 
-      // Connection: close to avoid keep-alive timeout in tests
-      request.append("Connection: close\r\n")
+      // Connection header (close by default to avoid keep-alive timeout in tests)
+      if connectionClose then {
+        request.append("Connection: close\r\n")
+      } else {
+        request.append("Connection: keep-alive\r\n")
+      }
 
       // Custom headers
       headers.foreach { case (name, value) =>

@@ -40,7 +40,7 @@ class HttpServerIntegrationSpec extends FunSuite {
         for {
           address <- server.start
           _ <- Eru.effect {
-            val response = SimpleHttpClient.get(s"http://${address}")
+            val response = SimpleHttpClient.get(s"http://${address}", connectionClose = false)
             assertEquals(response.status, 200)
 
             // Verify Connection: keep-alive header is present
