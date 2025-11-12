@@ -1,17 +1,17 @@
 package net.ghoula.eru.http.client
 
+import java.util.concurrent.atomic.AtomicInteger
+import scala.concurrent.duration.*
+
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
 import net.ghoula.eru.http.server.{HttpServer, HttpServerConfig}
 import net.ghoula.eru.prelude.*
 
-import java.util.concurrent.atomic.AtomicInteger
-import scala.concurrent.duration.*
-
 /** Simple HTTP server for testing HTTP client.
   *
-  * Native implementation using blocking NIO + Virtual Threads.
-  * Supports configurable responses, headers, delays, redirects, and error conditions.
+  * Native implementation using blocking NIO + Virtual Threads. Supports configurable responses,
+  * headers, delays, redirects, and error conditions.
   */
 final class TestHttpServer private (
   val port: Int,
@@ -20,9 +20,9 @@ final class TestHttpServer private (
 ) {
 
   def shutdown(): Unit = {
+    @annotation.nowarn("msg=unused")
     given EruRuntime = runtime
     server.shutdown.unsafeRunSync()
-    ()
   }
 
   def url(path: String = "/"): String = s"http://localhost:$port$path"
@@ -57,7 +57,8 @@ object TestHttpServer {
   )(using runtime: EruRuntime): TestHttpServer = {
     val requestHandler: Request[Body] => Eru[HttpError, Response[Body]] = req => {
       Eru.effect {
-        val config = handler(req.method.value, req.uri.path)
+        val fullPath = req.uri.path + req.uri.query.fold("")("?" + _)
+        val config = handler(req.method.value, fullPath)
 
         // Apply delay if configured
         if config.delay > Duration.Zero then {
@@ -153,12 +154,16 @@ object TestHttpServer {
         // Escape quotes in body content
         escapedBody = bodyContent.replaceAll("\"", "\\\\\"")
 
+        // Build full path with query string
+        fullPath = req.uri.path + req.uri.query.fold("")("?" + _)
+
         // Build JSON response
-        bodyJson = if bodyContent.nonEmpty then {
-          s"""{"method":"${req.method.value}","path":"${req.uri.path}",$headersJson,"body":"$escapedBody"}"""
-        } else {
-          s"""{"method":"${req.method.value}","path":"${req.uri.path}",$headersJson}"""
-        }
+        bodyJson =
+          if bodyContent.nonEmpty then {
+            s"""{"method":"${req.method.value}","path":"$fullPath",$headersJson,"body":"$escapedBody"}"""
+          } else {
+            s"""{"method":"${req.method.value}","path":"$fullPath",$headersJson}"""
+          }
 
         // Create response headers
         responseHeaders <- Headers.empty
