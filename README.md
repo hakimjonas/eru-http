@@ -1,92 +1,63 @@
 # eru-http
 
 [![CI](https://github.com/hakimjonas/eru-http/workflows/CI/badge.svg)](https://github.com/hakimjonas/eru-http/actions/workflows/ci.yml)
-[![Scala 3.7.3](https://img.shields.io/badge/scala-3.7.3-red.svg)](https://www.scala-lang.org/)
+[![Scala 3.7.4](https://img.shields.io/badge/scala-3.7.4-red.svg)](https://www.scala-lang.org/)
 [![Java 21](https://img.shields.io/badge/java-21-blue.svg)](https://openjdk.org/projects/jdk/21/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Standards-compliant HTTP client and server built on Eru with Virtual Threads**
+**High-performance HTTP/1.1 server and client built on Eru with Virtual Threads**
 
-eru-http is a modern, type-safe HTTP library for Scala 3 that leverages the [Eru effect system](https://github.com/ghoula/eru) for elegant, composable HTTP programming. Built on **native blocking NIO + Virtual Threads** for simplicity and performance, eru-http provides zero-cost abstractions through Scala 3's inline methods and opaque types.
+eru-http is a modern, standards-compliant HTTP library for Scala 3 that leverages the [Eru effect system](https://github.com/hakimjonas/eru) for elegant, composable HTTP programming. Built on **native blocking NIO + Virtual Threads** for simplicity and exceptional performance, eru-http provides zero-cost abstractions through Scala 3's inline methods and opaque types.
 
-> **Architecture Note**: eru-http uses blocking NIO with Eru's Virtual Thread backend, eliminating the complexity of event loops and callbacks while maintaining excellent performance. See [ARCHITECTURE-FIX.md](ARCHITECTURE-FIX.md) for details.
+## Why eru-http?
 
-## Features
+### 🚀 **Exceptional Performance**
+- **170-210k req/sec** (real-world benchmarks)
+- **285k req/sec** (with HTTP/1.1 pipelining)
+- **#1 among Virtual Thread-based servers**
+- **#2 in JVM ecosystem** (92.5% of pure Netty's performance)
+- **55% less code** than Netty-based implementations
 
-### 🚀 **HTTP Client**
-- Standards-compliant HTTP/1.1 client (HTTP/2 support planned)
-- Composable request/response interceptors
-- Automatic redirect handling
-- Cookie jar with domain/path matching (RFC 6265)
-- Compression support (gzip, deflate, brotli)
-- TLS/SSL configuration (TLS 1.2/1.3)
-- Connection pooling and timeout management
-- Type-safe request/response handling
+### 🎯 **Simple Architecture**
+- No Netty, no event loops, no callbacks
+- Direct `SocketChannel` / `ServerSocketChannel` usage
+- Blocking I/O is **efficient** on Virtual Threads (~10KB per thread)
+- One Virtual Thread per connection (server) or request (client)
+- Easy to understand, debug, and maintain
 
-### 🌐 **HTTP Server**
-- High-performance native NIO server (blocking + Virtual Threads)
-- Each connection on its own Virtual Thread (scalable to 100K+ connections)
-- Composable middleware with zero-cost abstractions
-- Built-in middleware: CORS, auth, logging, error handling
-- Request routing with pattern matching
-- Server-Sent Events (SSE) support (planned)
-- Multipart form data handling (RFC 7578)
-- Structured concurrency for automatic cleanup
+### ⚡ **Modern Stack**
+- **Scala 3.7.4** - Latest language features
+- **Java 21 Virtual Threads** - Lightweight concurrency
+- **Eru effects** - Pure functional error handling
+- **ZGC garbage collector** - <0.03% GC overhead under load
 
-### 📦 **Core HTTP Types**
-- Complete HTTP types: `Method`, `StatusCode`, `Headers`, `Uri`
-- RFC-compliant implementations:
-  - RFC 9110: HTTP Semantics
-  - RFC 6265: Cookies
-  - RFC 7578: Multipart Forms
-  - RFC 9111: HTTP Caching (ETags, Cache-Control)
-  - WHATWG: Server-Sent Events
-- Content negotiation and encoding
-- Functional body encoding/decoding
-
-### ⚡ **Eru Integration**
-- Pure functional effects with `Eru[E, A]`
-- Resource-safe operations with automatic cleanup
-- Composable error handling
-- Type-safe error channels
-- Effect transformations via interceptors/middleware
+### 📦 **Standards-Compliant**
+- RFC 9110 (HTTP Semantics)
+- RFC 6265 (Cookies)
+- RFC 7578 (Multipart Forms)
+- RFC 9111 (HTTP Caching)
+- RFC 3986 (URIs)
 
 ## Quick Start
 
 ### Installation
 
-```scala
-// build.sbt
-libraryDependencies ++= Seq(
-  "net.ghoula" %% "eru-http-core" % "1.0.0",
-  "net.ghoula" %% "eru-http-client" % "1.0.0",
-  "net.ghoula" %% "eru-http-server" % "1.0.0"
-)
+**Note**: eru-http is not yet published to Maven Central. For now, clone and build locally:
+
+```bash
+git clone https://github.com/hakimjonas/eru-http.git
+cd eru-http
+sbt publishLocal
 ```
 
-### Simple HTTP Client
+Then in your `build.sbt`:
 
 ```scala
-import net.ghoula.eru.*
-import net.ghoula.eru.http.*
-import net.ghoula.eru.http.client.*
-
-given runtime: EruRuntime = EruRuntime.shared
-
-// Resource-safe client with automatic cleanup
-val program = HttpClient.scoped() { client =>
-  for {
-    uri <- Uri.parse("https://api.github.com/users/ghoula")
-    request = Request.get(uri)
-    response <- client.send(request)
-    body <- BodyDecoder[String].decode(response.body)
-  } yield {
-    println(s"Status: ${response.status}")
-    println(s"Body: $body")
-  }
-}
-
-program.unsafeRunSync()
+libraryDependencies ++= Seq(
+  "net.ghoula" %% "eru-http-core" % "0.1.0-SNAPSHOT",
+  "net.ghoula" %% "eru-http-client" % "0.1.0-SNAPSHOT",
+  "net.ghoula" %% "eru-http-server" % "0.1.0-SNAPSHOT"
+)
 ```
 
 ### Simple HTTP Server
@@ -104,7 +75,7 @@ val handler: RequestHandler = req =>
       Response.ok(Body.text("Hello, World!"))
 
     case "/json" =>
-      val json = """{"message":"Hello, World!"}"""
+      val json = """{"message":"Hello from eru-http!"}"""
       Response.ok(Body.text(json, MediaType.applicationJson))
         .withContentType(MediaType.applicationJson)
 
@@ -112,297 +83,84 @@ val handler: RequestHandler = req =>
       Response.notFound(Body.text("Not Found"))
   }
 
-HttpServer.scoped(HttpServerConfig.localhost.withPort(8080))(handler) { server =>
+val server = HttpServer.scoped(HttpServerConfig.localhost.withPort(8080))(handler) { server =>
   Eru.effect {
     println(s"Server running at http://${server.address}")
-    scala.io.StdIn.readLine("Press ENTER to stop...")
+    println("Press ENTER to stop...")
+    scala.io.StdIn.readLine()
   }.mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
-}.unsafeRunSync()
-```
-
-## Core Concepts
-
-### Eru Effects
-
-All operations return `Eru[E, A]`, a pure functional effect that represents:
-- Success with value `A`
-- Failure with error `E`
-- Resource management via `bracket`
-- Composition via `flatMap`, `map`, etc.
-
-```scala
-val program: Eru[HttpError, String] = for {
-  client <- HttpClient.create(HttpClientConfig.default)
-  uri <- Uri.parse("https://example.com")
-  request = Request.get(uri)
-  response <- client.send(request)
-  body <- BodyDecoder[String].decode(response.body)
-  _ <- client.shutdown
-} yield body
-```
-
-### Interceptors (Client)
-
-Interceptors transform requests and responses in a composable way:
-
-```scala
-import net.ghoula.eru.http.client.Interceptor
-
-val client = HttpClient.create(HttpClientConfig.default)
-  .flatMap { baseClient =>
-    Eru.succeed(
-      baseClient
-        .withRequestInterceptor(Interceptor.bearerAuth("your-token"))
-        .withRequestInterceptor(Interceptor.userAgent("MyApp/1.0"))
-        .withRequestInterceptor(Interceptor.logRequest(println))
-        .withResponseInterceptor(Interceptor.logResponse(println))
-    )
-  }
-```
-
-**Built-in Interceptors:**
-- `addHeader` - Add custom headers
-- `bearerAuth` / `basicAuth` - Authentication
-- `userAgent` - Set User-Agent
-- `logRequest` / `logResponse` - Logging
-- `when` - Conditional application
-
-**Zero-cost composition** via Scala 3 `inline` methods:
-
-```scala
-val auth = Interceptor.bearerAuth("token")
-val logging = Interceptor.logging(println)
-val combined = auth andThen logging // Inlined at compile time
-```
-
-### Middleware (Server)
-
-Middleware wraps request handlers to add cross-cutting concerns:
-
-```scala
-import net.ghoula.eru.http.server.*
-
-val app = Middleware
-  .logging(println)
-  .andThen(Middleware.corsPermissive)
-  .andThen(Middleware.requestId())
-  .andThen(Middleware.errorHandlerDefault)
-  .apply(handler)
-
-HttpServer.scoped(HttpServerConfig.localhost.withPort(8080))(app) { server =>
-  // Server is running with full middleware stack
 }
+
+server.unsafeRunSync()
 ```
 
-**Built-in Middleware:**
-- `logging` / `loggingSimple` - Request/response logging
-- `cors` / `corsPermissive` - CORS headers
-- `auth` / `bearerAuth` - Authentication
-- `requestId` - Unique request IDs
-- `errorHandler` / `errorHandlerDefault` - Error handling
-- `when` / `forPath` / `forMethod` - Conditional application
-
-**Type signature:**
-```scala
-type Middleware = RequestHandler => RequestHandler
-type RequestHandler = Request[Body] => Eru[HttpError, Response[Body]]
-```
-
-### HTTP Types
+### Simple HTTP Client
 
 ```scala
-// Methods
-Method.GET
-Method.POST
-Method.PUT
-Method.DELETE
-// ... all standard methods
+import net.ghoula.eru.*
+import net.ghoula.eru.http.*
+import net.ghoula.eru.http.client.*
 
-// Status Codes
-StatusCode.Ok              // 200
-StatusCode.Created         // 201
-StatusCode.BadRequest      // 400
-StatusCode.NotFound        // 404
-StatusCode.InternalServerError // 500
+given runtime: EruRuntime = EruRuntime.shared
 
-// Headers
-Headers.empty
-  .add("Content-Type", "application/json")
-  .add("Authorization", "Bearer token")
-
-// URIs
-Uri.parse("https://example.com/path?query=value#fragment")
-  .map { uri =>
-    uri.scheme // Some("https")
-    uri.host   // Some("example.com")
-    uri.path   // "/path"
-    uri.query  // Some("query=value")
-  }
-
-// Bodies
-Body.Empty
-Body.text("Hello, World!")
-Body.text("""{"key":"value"}""", MediaType.applicationJson)
-Body.Binary(bytes)
-```
-
-### Request Building
-
-```scala
-// GET request
-val getReq = Request.get(uri)
-
-// POST with JSON
-val postReq = Request.post(uri, Body.text(json, MediaType.applicationJson))
-
-// With headers
-val authedReq = Request.get(uri)
-  .flatMap(_.setHeader("Authorization", "Bearer token"))
-
-// With query parameters
-val searchReq = Request.get(uri.withQuery("q=scala"))
-```
-
-### Response Handling
-
-```scala
-// Create responses
-Response.ok(Body.text("Success"))
-Response.created(location, Body.text("Created"))
-Response.notFound(Body.text("Not Found"))
-
-// With headers
-Response.ok(body)
-  .flatMap(_.setHeader("Cache-Control", "max-age=3600"))
-  .withContentType(MediaType.applicationJson)
-
-// Status checking
-response.status.isSuccess      // 2xx
-response.status.isRedirection  // 3xx
-response.status.isClientError  // 4xx
-response.status.isServerError  // 5xx
-```
-
-## Advanced Features
-
-### Cookie Jar
-
-```scala
-val clientWithCookies = HttpClientConfig.default
-  .withCookieJar(CookieJar.inMemory.unsafeRunSync())
-
-// Cookies are automatically:
-// - Sent with matching requests (domain/path)
-// - Stored from Set-Cookie headers
-// - Filtered by expiration
-```
-
-### Content Encoding
-
-```scala
-// Compression
-val compressed = Compression.compress(bytes, ContentEncoding.gzip)
-
-// Decompression
-val decompressed = Compression.decompress(bytes, ContentEncoding.gzip)
-
-// Supported: gzip, deflate, brotli
-```
-
-### Multipart Forms
-
-```scala
-import net.ghoula.eru.http.Multipart
-
-val parts = List(
-  Part.formField("name", "John Doe"),
-  Part.formField("email", "john@example.com"),
-  Part.fileFromBytes("avatar", "photo.jpg", imageBytes, MediaType.imageJpeg)
-)
-
-Multipart.formData(parts).flatMap { multipart =>
-  val body = multipart.toBody
-  val contentType = multipart.contentType
-  Request.post(uri, body).flatMap(_.setHeader("Content-Type", contentType.value))
+val program = HttpClient.scoped() { client =>
+  for {
+    uri <- Uri.parse("http://localhost:8080/json")
+    request = Request.get(uri)
+    response <- client.send(request)
+    _ <- Eru.effect {
+      println(s"Status: ${response.status}")
+      println(s"Body: ${String(response.body.toArray, "UTF-8")}")
+    }.mapError(e => HttpError.NetworkError(e.getMessage, Some(e)))
+  } yield ()
 }
+
+program.unsafeRunSync()
 ```
 
-### Server-Sent Events
+## Features
 
-```scala
-import net.ghoula.eru.http.ServerSentEvent
+### 🌐 **HTTP Server** (Production Ready ✅)
+- Native blocking NIO + Virtual Threads
+- **170-210k req/sec** sustained throughput
+- HTTP/1.1 with keep-alive support
+- Composable middleware system
+- Request/response interceptors
+- Timeout handling (request, idle)
+- Graceful shutdown
+- Structured concurrency with automatic cleanup
+- Multipart form data (RFC 7578)
+- Cookie handling (RFC 6265)
+- Compression (gzip, deflate, brotli)
 
-// Create events
-val event1 = ServerSentEvent.data("Hello, World!")
-val event2 = ServerSentEvent.event("notification", """{"type":"update"}""")
-val event3 = ServerSentEvent(
-  data = "Message",
-  event = Some("chat"),
-  id = Some("123"),
-  retry = Some(5000)
-)
+### 🚀 **HTTP Client** (In Development 🔄)
+- Native blocking NIO + Virtual Threads
+- HTTP/1.1 protocol support
+- Request/response interceptors
+- Automatic redirect handling
+- Cookie jar with domain/path matching
+- Timeout management (connect, request)
+- Body encoding/decoding
+- Resource-safe with `HttpClient.scoped`
+- **Coming soon**: Connection pooling, TLS/SSL, streaming
 
-// Serialize
-val sseText = event1.toSSE // "data: Hello, World!\n\n"
+### 📦 **Core HTTP Types** (Complete ✅)
+- `Method`, `StatusCode`, `Headers`, `Uri`
+- `Request[A]`, `Response[A]` with type-safe bodies
+- `Body` (Empty, Text, Binary, Stream)
+- `Cookie`, `CookieJar`, `ETag`, `CacheControl`
+- `MediaType`, `ContentEncoding`, `Charset`
+- `Multipart`, `ServerSentEvent`
+- Opaque types for validated values
+- RFC-compliant parsing and validation
 
-// Parse
-ServerSentEvent.parse(sseText)
-```
-
-### ETag Caching
-
-```scala
-// Generate ETag from content
-val etag = ETag.fromBytes(responseBytes)
-
-// Conditional requests
-request.setHeader("If-None-Match", etag.headerValue)
-
-// Response
-if (requestEtag.exists(_.matches(currentEtag))) {
-  Response.notModified
-} else {
-  Response.ok(body).setHeader("ETag", currentEtag.headerValue)
-}
-```
-
-### TLS Configuration
-
-```scala
-// Secure defaults (TLS 1.3 + 1.2, verify certificates and hostname)
-HttpClientConfig.default.withTls(TlsConfig.default)
-
-// TLS 1.3 only
-HttpClientConfig.default.withTls(TlsConfig.tls13Only)
-
-// Insecure (testing only!)
-HttpClientConfig.default.withTls(TlsConfig.insecure)
-
-// Custom
-HttpClientConfig.default.withTls(
-  TlsConfig(
-    enabled = true,
-    protocols = List(TlsVersion.TLSv1_3),
-    trustAll = false,
-    verifyHostname = true
-  )
-)
-```
-
-## Examples
-
-The `examples/` directory contains comprehensive, copy-paste ready examples:
-
-1. **[01_SimpleClient.scala](examples/src/main/scala/examples/01_SimpleClient.scala)** - Basic HTTP client usage
-2. **[02_ClientWithAuth.scala](examples/src/main/scala/examples/02_ClientWithAuth.scala)** - Interceptors and authentication
-3. **[03_FileUpload.scala](examples/src/main/scala/examples/03_FileUpload.scala)** - Multipart form data
-4. **[04_SimpleServer.scala](examples/src/main/scala/examples/04_SimpleServer.scala)** - Basic HTTP server
-5. **[05_ServerWithMiddleware.scala](examples/src/main/scala/examples/05_ServerWithMiddleware.scala)** - Middleware composition
-6. **[06_RestApi.scala](examples/src/main/scala/examples/06_RestApi.scala)** - Complete REST API with CRUD
-7. **[07_ServerSentEvents.scala](examples/src/main/scala/examples/07_ServerSentEvents.scala)** - SSE event streams
-8. **[08_CompleteApp.scala](examples/src/main/scala/examples/08_CompleteApp.scala)** - Production-ready application
-
-See [examples/README.md](examples/README.md) for detailed explanations.
+### ⚡ **Eru Integration**
+- Pure functional effects with `Eru[E, A]`
+- Resource-safe operations via `scoped`
+- Composable error handling
+- Type-safe error channels
+- Structured concurrency
+- Built-in observability (EruObserver, RuntimeMetrics, EruTrace)
 
 ## Architecture
 
@@ -415,180 +173,305 @@ eru-http
 │   ├── Multipart, ServerSentEvent
 │   └── Compression, ContentEncoding
 │
-├── eru-http-client    # HTTP client implementation
-│   ├── HttpClient (Netty-based)
+├── eru-http-client    # HTTP/1.1 client (native NIO + VT)
+│   ├── NativeHttpClient
 │   ├── Interceptors
 │   ├── CookieJar
 │   └── HttpClientConfig
 │
-└── eru-http-server    # HTTP server implementation
-    ├── HttpServer (Netty-based)
+└── eru-http-server    # HTTP/1.1 server (native NIO + VT)
+    ├── NativeHttpServer
     ├── Middleware
     ├── RequestHandler
     └── HttpServerConfig
 ```
 
-**Design Principles:**
-- **Effect-oriented**: All operations return `Eru[E, A]`
-- **Resource-safe**: Automatic cleanup via `scoped`
-- **Type-safe**: Compile-time guarantees
-- **Standards-compliant**: RFC adherence
-- **Zero-cost abstractions**: Inline methods, extension methods
-- **Composable**: Interceptors and middleware
+**Key Design Decisions:**
+- ✅ Native blocking NIO (not Netty)
+- ✅ Virtual Threads (Java 21)
+- ✅ HTTP/1.1 focus (HTTP/2 deferred)
+- ✅ Scala 3 only (no legacy support)
+- ✅ Effects via Eru only (no Future/IO)
+- ✅ Zero external dependencies (except Valar validation, brotli4j compression)
 
 ## Performance
 
-eru-http is built on Netty, the same high-performance I/O framework used by Play Framework, Akka HTTP, and http4s. Combined with Eru's zero-cost effect transformations, eru-http delivers excellent performance.
+eru-http achieves exceptional performance through architectural simplicity:
 
-### Benchmark Results (Actual)
+### Benchmark Results (Scala 3.7.4, Java 21, ZGC)
 
-**Measured on October 3, 2025:**
+**Server Performance** (HTTP/1.1):
+- **bombardier**: 172k req/sec @ 16k connections
+- **rewrk**: 211k req/sec @ 16k connections
+- **wrk** (pipelined): 285k req/sec @ 16k connections
+- **Real-world estimate**: **170-210k req/sec**
 
-**Throughput:**
-- **Plaintext: 68-71k req/s** (baseline, no tuning)
-- **JSON: 74k req/s** (baseline, no tuning)
+**Stability**:
+- Zero crashes under extreme load (64k connections)
+- Zero memory leaks
+- 0.03% GC overhead (ZGC)
+- ~49% heap usage under load
 
-**Latency:**
-- **Average: ~1ms** (medium load, 100 connections)
-- **P95: <7ms** (high load, 400 connections)
-- **Max: <20ms** (medium load)
+**Latency** (16k connections):
+- **p50**: 45-48ms
+- **p95**: 55-65ms
+- **p99**: 75-95ms
 
-**Configuration:** Default settings, no JVM tuning, no middleware applied
+### Competitive Position
 
-See [BENCHMARKING.md](BENCHMARKING.md) for testing guide and [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) for detailed results.
+| Framework | Req/sec | Architecture | Code Complexity |
+|-----------|---------|--------------|-----------------|
+| Pure Netty | ~200k | Event loop | High |
+| **eru-http** | **170-210k** | **VT + blocking NIO** | **Low** |
+| http4s | ~150k | Cats Effect + Netty | High |
+| ZIO HTTP | ~200k+ | ZIO + Netty | High |
 
-## Comparison with Other Libraries
+**eru-http ranks #1 among Virtual Thread-based servers and #2 in the JVM ecosystem**, while being dramatically simpler to understand and maintain.
 
-### vs. http4s
-- **Similarities**: Both use Netty backend, functional approach
-- **eru-http advantages**:
-  - Simpler effect model (Eru vs Cats Effect)
-  - Faster compile times
-  - Zero-cost interceptors/middleware via `inline`
-  - More intuitive API for newcomers
-- **http4s advantages**:
-  - Mature ecosystem
-  - FS2 streaming integration
-  - Larger community
+See [ROADMAP.md](ROADMAP.md) for detailed performance analysis.
 
-### vs. sttp
-- **Similarities**: Both focus on client-side HTTP
-- **eru-http advantages**:
-  - Native server support
-  - Effect-first design
-  - Unified client/server types
-- **sttp advantages**:
-  - Multiple backend support (sync, async, streaming)
-  - Comprehensive client features
-  - More flexible effect integration
+## Core Concepts
 
-### vs. ZIO HTTP
-- **Similarities**: Both leverage Scala 3, functional effects
-- **eru-http advantages**:
-  - Simpler, less opinionated
-  - Lower framework overhead
-  - Easier learning curve
-- **ZIO HTTP advantages**:
-  - Full ZIO ecosystem integration
-  - WebSocket support (eru-http: planned)
-  - More built-in features
+### Eru Effects
 
-### vs. Akka HTTP
-- **eru-http advantages**:
-  - Scala 3 native
-  - Simpler API
-  - No actor system required
-  - Better type inference
-- **Akka HTTP advantages**:
-  - Battle-tested in production
-  - WebSocket support
-  - Larger ecosystem
+All operations return `Eru[E, A]` - a pure functional effect:
 
-**When to choose eru-http:**
-- You want a modern, Scala 3-first HTTP library
-- You prefer simple, composable effects over complex effect systems
-- You value compile-time performance and zero-cost abstractions
-- You're building Eru-based applications
+```scala
+val program: Eru[HttpError, String] = for {
+  client <- HttpClient.create(HttpClientConfig.default)
+  uri <- Uri.parse("http://example.com")
+  request = Request.get(uri)
+  response <- client.send(request)
+  _ <- client.shutdown
+} yield String(response.body.toArray, "UTF-8")
+```
+
+### Middleware (Server)
+
+Composable request transformation:
+
+```scala
+val app = Middleware
+  .logging(println)
+  .andThen(Middleware.cors)
+  .andThen(Middleware.requestId())
+  .apply(handler)
+```
+
+**Built-in Middleware:**
+- `logging` - Request/response logging
+- `cors` / `corsPermissive` - CORS headers
+- `auth` / `bearerAuth` - Authentication
+- `requestId` - Unique request IDs
+- `errorHandler` - Error handling
+- `when` / `forPath` / `forMethod` - Conditional application
+
+### Interceptors (Client)
+
+Composable request/response transformation:
+
+```scala
+val client = baseClient
+  .withRequestInterceptor(Interceptor.bearerAuth("token"))
+  .withRequestInterceptor(Interceptor.userAgent("MyApp/1.0"))
+  .withResponseInterceptor(Interceptor.logResponse(println))
+```
+
+**Built-in Interceptors:**
+- `addHeader` - Custom headers
+- `bearerAuth` / `basicAuth` - Authentication
+- `userAgent` - User-Agent header
+- `logRequest` / `logResponse` - Logging
+- `when` - Conditional application
+
+## Examples
+
+The `examples/` directory contains comprehensive examples:
+
+1. **Simple Client** - Basic HTTP client usage
+2. **Client with Auth** - Interceptors and authentication
+3. **File Upload** - Multipart form data
+4. **Simple Server** - Basic HTTP server
+5. **Server with Middleware** - Middleware composition
+6. **REST API** - Complete CRUD API
+7. **Server-Sent Events** - SSE streaming
+8. **Complete App** - Production-ready application
+
+Run examples:
+```bash
+sbt "examples/runMain examples.SimpleServer"
+```
 
 ## Project Status
 
-**Current Version:** 1.0.0
+**Current Version:** 0.1.0-SNAPSHOT
+**Progress:** ~75% complete for v1.0.0
 
-**Maturity:** Production Ready
-- ✅ 610 tests passing
-- ✅ Zero scalafix violations
-- ✅ Zero compiler warnings
-- ✅ Complete RFC compliance
-- ✅ Comprehensive documentation
-- ✅ Production-ready examples
+### What's Complete ✅
+- Core HTTP types (100%)
+- HTTP/1.1 Server (100%)
+- Compression (gzip, deflate, brotli)
+- Cookie handling (RFC 6265)
+- Multipart forms (RFC 7578)
+- Extensive benchmarking and validation
 
-**Supported Platforms:**
-- ✅ JVM (Scala 3.7.3+)
-- ⏳ Scala.js (pending Eru JS support)
-- ⏳ Scala Native (pending Eru Native support)
+### In Progress 🔄
+- **HTTP/1.1 Client** (80% complete)
+  - Core functionality: ✅
+  - Connection pooling: 🔄 **Current focus**
+  - TLS/SSL: ⏳ Next
+  - Streaming: ⏳ After TLS
 
-**Planned Features (1.x):**
-- WebSocket support (eru-websocket package)
-- HTTP/2 support
-- Resilience patterns (eru-http-resilience)
-- Metrics and monitoring (eru-http-metrics)
+### Planned for v1.0 📋
+- Client connection pooling
+- TLS/SSL (client & server)
+- Complete streaming support
+- Server-Sent Events (SSE)
+- Comprehensive test suite
+- Complete documentation
 
-## Documentation
+### Future (Post v1.0) 🔮
+- **eru-circe** - JSON integration (separate library)
+- WebSocket support
+- HTTP/2 consideration
+- GraalVM native image support
 
-- **[Examples README](examples/README.md)** - Detailed usage examples
-- **[Benchmarking Guide](BENCHMARKING.md)** - Performance testing
-- **[Contributing](CONTRIBUTING.md)** - How to contribute *(TODO)*
-- **[Changelog](CHANGELOG.md)** - Version history *(TODO)*
+See [ROADMAP.md](ROADMAP.md) for detailed roadmap and [STATUS.md](STATUS.md) for current status.
 
 ## Requirements
 
-- **Scala:** 3.7.3 or higher
-- **JVM:** Java 21 or higher
+- **Scala:** 3.7.4
+- **JVM:** Java 21+ (Virtual Threads required)
 - **Dependencies:**
-  - Eru (effect system)
-  - Valar (validation)
-  - Netty (I/O framework)
-  - Brotli4j (compression)
+  - [Eru](https://github.com/hakimjonas/eru) (effect system)
+  - [Valar](https://github.com/hakimjonas/valar) (validation)
+  - brotli4j (compression)
 
 ## Building from Source
 
 ```bash
-git clone https://github.com/ghoula/eru-http.git
+# Clone repository
+git clone https://github.com/hakimjonas/eru-http.git
 cd eru-http
+
+# Ensure Eru is available (local development)
+cd ../eru && sbt publishLocal && cd ../eru-http
+
+# Build eru-http
+sbt compile
+
+# Run tests
 sbt test
+
+# Run benchmarks
+sbt "server/Test/runMain net.ghoula.eru.http.server.BenchmarkServer"
 ```
+
+## Benchmarking
+
+Install benchmarking tools:
+```bash
+# wrk (HTTP/1.1 with pipelining)
+sudo apt install wrk
+
+# bombardier (Go-based, no pipelining bias)
+# Download from https://github.com/codesenberg/bombardier
+
+# rewrk (Rust-based, HTTP/2 capable)
+cargo install rewrk
+```
+
+Run benchmarks:
+```bash
+# Start server
+sbt "server/Test/runMain net.ghoula.eru.http.server.BenchmarkServer"
+
+# In another terminal
+wrk -t 4 -c 16000 -d 3m --latency http://localhost:8080/plaintext
+bombardier -c 16000 -d 3m -l http://localhost:8080/plaintext
+rewrk -h http://localhost:8080/plaintext -c 16000 -d 3m -t 4 --pct
+```
+
+See [ROADMAP.md](ROADMAP.md) for detailed benchmarking results.
 
 ## Contributing
 
-Contributions are welcome! Please:
+Contributions welcome! This project is under active development.
 
+**Current Focus:**
+- Connection pooling implementation (client)
+- TLS/SSL support (client & server)
+- Integration testing
+
+**How to Contribute:**
 1. Fork the repository
 2. Create a feature branch
-3. Write tests for new functionality
-4. Ensure all tests pass: `sbt test`
-5. Run scalafmt: `sbt fmt`
-6. Run scalafix: `sbt fix`
-7. Submit a pull request
+3. Write tests
+4. Ensure `sbt test` passes
+5. Run `sbt prepare` (formats and fixes code)
+6. Submit a pull request
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+See [ROADMAP.md](ROADMAP.md) for areas needing help.
+
+## Documentation
+
+- **[ROADMAP.md](ROADMAP.md)** - Detailed project roadmap and progress
+- **[STATUS.md](STATUS.md)** - Current status and recent progress
+- **[MANIFESTO.md](MANIFESTO.md)** - Design principles and philosophy
+- **[ARCHITECTURE-FIX.md](ARCHITECTURE-FIX.md)** - Architecture decisions
+- **[Examples](examples/)** - Code examples
+
+## Comparison with Other Libraries
+
+### vs. ZIO HTTP
+- **eru-http**: Simpler, blocking NIO + VT, 170-210k req/sec
+- **ZIO HTTP**: Full ZIO ecosystem, Netty-based, ~200k req/sec
+- **Trade-off**: eru-http prioritizes simplicity over features
+
+### vs. http4s
+- **eru-http**: Native NIO, Eru effects, 170-210k req/sec
+- **http4s**: Netty-based, Cats Effect, ~150k req/sec
+- **Trade-off**: eru-http is younger but simpler
+
+### vs. Akka HTTP
+- **eru-http**: Scala 3 native, no actors, Virtual Threads
+- **Akka HTTP**: Mature, battle-tested, actor-based
+- **Trade-off**: eru-http is more modern, Akka HTTP more proven
+
+**Choose eru-http if:**
+- You want a modern, Scala 3-first HTTP library
+- You prefer simple architecture over complex abstractions
+- You value compile-time performance
+- You're building Eru-based applications
+- You want exceptional performance with minimal code
+
+## Philosophy
+
+eru-http demonstrates the power of:
+1. Building on stable, emerging technologies (Scala 3 + Virtual Threads)
+2. Avoiding framework baggage (no Netty, no reactive streams)
+3. Using simple primitives (blocking NIO is efficient on VTs)
+4. Prioritizing correctness over convenience
+5. Validating through real-world dogfooding
+
+**"Not on the extreme cutting edge, but out in front of established systems that have baggage."**
+
+## Acknowledgments
+
+- **[Eru](https://github.com/hakimjonas/eru)** - The effect system powering eru-http
+- **[Valar](https://github.com/hakimjonas/valar)** - Validation library
+- **[http4s](https://http4s.org/)** - Inspiration for functional HTTP
+- **[ZIO HTTP](https://github.com/zio/zio-http)** - Competitive inspiration
 
 ## License
 
 eru-http is licensed under the [MIT License](LICENSE).
 
-## Acknowledgments
-
-- **[Eru](https://github.com/ghoula/eru)** - The effect system powering eru-http
-- **[Netty](https://netty.io/)** - High-performance async I/O framework
-- **[http4s](https://http4s.org/)** - Inspiration for functional HTTP
-- **[sttp](https://sttp.softwaremill.com/)** - Inspiration for client API design
-
 ## Support
 
-- **Issues:** [GitHub Issues](https://github.com/ghoula/eru-http/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/ghoula/eru-http/discussions)
-- **Eru Project:** [Eru on GitHub](https://github.com/ghoula/eru)
+- **Issues:** [GitHub Issues](https://github.com/hakimjonas/eru-http/issues)
+- **Eru Project:** [Eru on GitHub](https://github.com/hakimjonas/eru)
 
 ---
 
-**Built with ❤️ using Scala 3 and Eru**
+**Built with Scala 3, Eru, and Virtual Threads**
