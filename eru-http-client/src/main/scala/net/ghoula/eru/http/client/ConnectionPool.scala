@@ -341,19 +341,17 @@ private[client] final class NativeConnectionPool(
   }
 
   private def connectSocket(host: String, port: Int): Eru[HttpError, SocketChannel] = {
-    Eru
-      .effect {
-        val socket = SocketChannel.open()
-        socket.configureBlocking(true)
-        socket.connect(new InetSocketAddress(host, port))
-        socket
-      }
-      .mapError { e =>
-        HttpError.ConnectionError(
-          s"Failed to connect to $host:$port: ${e.getMessage}",
-          Some(e)
-        )
-      }
+    Eru.effect {
+      val socket = SocketChannel.open()
+      socket.configureBlocking(true)
+      socket.connect(new InetSocketAddress(host, port))
+      socket
+    }.mapError { e =>
+      HttpError.ConnectionError(
+        s"Failed to connect to $host:$port: ${e.getMessage}",
+        Some(e)
+      )
+    }
       .timeout(java.time.Duration.ofMillis(connectTimeout.toMillis))
       .mapError {
         case e: HttpError => e
