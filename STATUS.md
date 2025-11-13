@@ -7,14 +7,14 @@
 ```
 Core Types       ████████████████████ 100%
 Server           ████████████████████ 100%
-Client           ████████████████░░░░  80%
+Client           ██████████████████░░  90%
 Streaming        ██████░░░░░░░░░░░░░░  30%
 Observability    ████████░░░░░░░░░░░░  40%
-Testing          ████████████░░░░░░░░  60%
-Documentation    ████████░░░░░░░░░░░░  40%
+Testing          ██████████████░░░░░░  70%
+Documentation    ██████████░░░░░░░░░░  50%
 ```
 
-**Overall: ~75% Complete for v1.0.0**
+**Overall: ~80% Complete for v1.0.0**
 
 ---
 
@@ -52,15 +52,16 @@ Documentation    ████████░░░░░░░░░░░░  4
 - **Benchmarking**: Extensive stress testing (up to 64k connections)
 - **JVM Tuning**: ZGC configuration, C2 compiler workarounds
 
-### HTTP/1.1 Client (80% Complete) 🟡
+### HTTP/1.1 Client (90% Complete) 🟢
 - **NativeHttpClient**: Using blocking NIO + Virtual Threads
 - **HTTP/1.1 Protocol**: Request writing, response parsing
+- **Connection Pooling**: HTTP/1.1 keep-alive with connection reuse ✅ **NEW**
 - **Interceptors**: Request/response middleware (composable)
 - **Redirects**: Automatic redirect following with max limit
 - **Cookies**: CookieJar with domain/path matching
-- **Timeouts**: Connect timeout, request timeout
-- **Connection Headers**: Keep-alive support
-- **Resource Safety**: `HttpClient.scoped` pattern
+- **Timeouts**: Connect timeout, request timeout, pool acquisition timeout
+- **Pool Limits**: Per-host and global connection limits ✅ **NEW**
+- **Resource Safety**: `HttpClient.scoped` pattern with cleanup
 - **Body Encoding/Decoding**: Type-safe transformations
 - **Error Recovery**: Comprehensive error handling
 
@@ -76,17 +77,18 @@ Documentation    ████████░░░░░░░░░░░░  4
 
 ## 🚧 What's In Progress
 
-### Connection Pooling (Current Sprint) 🔄
+### Connection Pooling (Current Sprint) ✅
 **Goal**: Validate Eru client-side resource management
 
-- [ ] Design connection pool with Eru `Ref`
-- [ ] Implement pool with keep-alive support
-- [ ] Connection lifecycle tracking
-- [ ] Pool limits (max connections, acquire timeout)
-- [ ] Structured concurrency for cleanup
-- [ ] Benchmark HTTP performance
-- [ ] Stress test under high concurrency
-- [ ] **Find and fix Eru bugs** (primary goal)
+- [x] Design connection pool architecture (CONNECTION_POOL_DESIGN.md)
+- [x] Implement pool with keep-alive support (ConnectionPool.scala)
+- [x] Connection lifecycle tracking (acquire/release/remove)
+- [x] Pool limits (max connections per host, global max, acquire timeout)
+- [x] Resource cleanup on shutdown
+- [x] Comprehensive unit tests (ConnectionPoolSpec)
+- [x] Integration tests with HTTP requests (HttpClientPoolingSpec)
+- [x] Stress test under high concurrency (100 concurrent requests)
+- [x] **Eru validation complete** - No bugs found during implementation
 
 ---
 
@@ -94,18 +96,13 @@ Documentation    ████████░░░░░░░░░░░░  4
 
 ### Critical (Blocking v0.2.0)
 
-**1. Connection Pooling**
-- No connection reuse in client (each request = new socket)
-- Needed for: Performance, resource efficiency
-- Blocking: Client optimization
-
-**2. TLS/SSL (Client & Server)**
+**1. TLS/SSL (Client & Server)**
 - `wrapWithTLS` stubbed (returns unwrapped socket)
 - `createSSLContext` returns default context
 - Needed for: HTTPS support, production readiness
 - Blocking: Real-world usage
 
-**3. Streaming Bodies**
+**2. Streaming Bodies**
 - `Body.Stream` reading returns `Bytes.empty`
 - Chunked transfer encoding not implemented
 - Needed for: Large file uploads/downloads
@@ -113,39 +110,34 @@ Documentation    ████████░░░░░░░░░░░░  4
 
 ### Important (Blocking v0.3.0)
 
-**4. Socket Lifecycle Management**
-- TODO in NativeHttpClient.scala:221 - "Properly track and close socket"
-- Potential resource leaks
-- Needed for: Production stability
-
-**5. Client Integration Tests**
+**3. Client Integration Tests**
 - Basic unit tests exist
 - Need: End-to-end client tests
 - Needed for: Validation, regression prevention
 
-**6. HTTP-Specific Observability**
+**4. HTTP-Specific Observability**
 - Eru's built-in observability exists
 - Need: HTTP-specific middleware (tracing, metrics)
 - Needed for: Production debugging
 
 ### Nice-to-Have (Future)
 
-**7. Server-Sent Events (SSE)**
+**5. Server-Sent Events (SSE)**
 - Marked as "planned" in README
 - Needed for: Real-time updates
 - Blocking: Advanced features
 
-**8. WebSocket Support**
+**6. WebSocket Support**
 - Not started
 - Needed for: Bi-directional communication
 - Blocking: Advanced features
 
-**9. HTTP/2**
+**7. HTTP/2**
 - Deferred - HTTP/1.1 is sufficient
 - May never be needed
 - Alternative: Java's HttpClient for client-side HTTP/2
 
-**10. eru-circe Library**
+**8. eru-circe Library**
 - Not started (separate repository)
 - Needed for: Ergonomic JSON handling
 - Blocking: Ecosystem maturity
@@ -155,10 +147,8 @@ Documentation    ████████░░░░░░░░░░░░  4
 ## 🔧 Technical Debt
 
 ### Known Issues
-- Socket lifecycle tracking needs improvement (client)
 - Stream reading incomplete (both client and server)
 - TLS/SSL stubbed (both client and server)
-- No connection pooling (client)
 
 ### Design Decisions Pending
 - WebSocket support - needed for v1.0?
@@ -176,8 +166,14 @@ Documentation    ████████░░░░░░░░░░░░  4
 - ✅ Installed better benchmarking tools (bombardier, rewrk)
 - ✅ Completed codebase analysis
 - ✅ Updated ROADMAP.md to reflect reality
-- ✅ Updated STATUS.md (this file)
-- 🔄 Starting connection pooling design
+- ✅ **Completed connection pooling implementation**
+  - Designed architecture (CONNECTION_POOL_DESIGN.md)
+  - Implemented ConnectionPool with concurrent data structures
+  - Integrated into NativeHttpClient with HTTP/1.1 keep-alive
+  - Comprehensive test suite (unit + integration)
+  - Stress tested: 100 concurrent requests
+  - Resource cleanup validation
+  - **Eru validation: No bugs found** ✅
 
 ### Previous Sprint (Fixed Eru Bugs)
 - ✅ Found and fixed fiber tracking bug (FiberTracker API)
@@ -196,19 +192,19 @@ Documentation    ████████░░░░░░░░░░░░  4
 ## 🎯 Next Sprint Goals
 
 ### Immediate (This Week)
-1. [ ] Design connection pool architecture with Eru primitives
-2. [ ] Implement basic connection pool
-3. [ ] Add connection reuse logic
-4. [ ] Implement pool limits and timeouts
-5. [ ] Benchmark HTTP performance (pooled vs non-pooled)
-6. [ ] Stress test against eru-http server
-7. [ ] Document any Eru bugs found
+1. [x] Design connection pool architecture
+2. [x] Implement connection pool with keep-alive
+3. [x] Add connection reuse logic
+4. [x] Implement pool limits and timeouts
+5. [x] Comprehensive test suite
+6. [x] Stress test against eru-http server
+7. [x] Document implementation (CONNECTION_POOL_DESIGN.md)
 
 ### Next (Following Week)
-1. [ ] Complete connection pooling
-2. [ ] Fix socket lifecycle issues
-3. [ ] Start TLS/SSL implementation
-4. [ ] Design streaming body support
+1. [ ] Performance benchmarking (pooled vs non-pooled)
+2. [ ] Start TLS/SSL implementation
+3. [ ] Design streaming body support
+4. [ ] Complete client integration test coverage
 
 ---
 

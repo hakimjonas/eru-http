@@ -133,16 +133,18 @@ program.unsafeRunSync()
 - Cookie handling (RFC 6265)
 - Compression (gzip, deflate, brotli)
 
-### 🚀 **HTTP Client** (In Development 🔄)
+### 🚀 **HTTP Client** (90% Complete 🟢)
 - Native blocking NIO + Virtual Threads
 - HTTP/1.1 protocol support
+- **Connection pooling with HTTP/1.1 keep-alive** ✅ **NEW**
 - Request/response interceptors
 - Automatic redirect handling
 - Cookie jar with domain/path matching
-- Timeout management (connect, request)
+- Timeout management (connect, request, pool acquisition)
+- **Pool limits (per-host and global)** ✅ **NEW**
 - Body encoding/decoding
 - Resource-safe with `HttpClient.scoped`
-- **Coming soon**: Connection pooling, TLS/SSL, streaming
+- **Coming soon**: TLS/SSL, streaming
 
 ### 📦 **Core HTTP Types** (Complete ✅)
 - `Method`, `StatusCode`, `Headers`, `Uri`
@@ -305,25 +307,25 @@ sbt "examples/runMain examples.SimpleServer"
 ## Project Status
 
 **Current Version:** 0.1.0-SNAPSHOT
-**Progress:** ~75% complete for v1.0.0
+**Progress:** ~80% complete for v1.0.0
 
 ### What's Complete ✅
 - Core HTTP types (100%)
 - HTTP/1.1 Server (100%)
+- **HTTP client connection pooling** (100%) ✅ **NEW**
 - Compression (gzip, deflate, brotli)
 - Cookie handling (RFC 6265)
 - Multipart forms (RFC 7578)
 - Extensive benchmarking and validation
 
 ### In Progress 🔄
-- **HTTP/1.1 Client** (80% complete)
+- **HTTP/1.1 Client** (90% complete)
   - Core functionality: ✅
-  - Connection pooling: 🔄 **Current focus**
-  - TLS/SSL: ⏳ Next
-  - Streaming: ⏳ After TLS
+  - Connection pooling: ✅ **Complete**
+  - TLS/SSL: 🔄 **Current focus**
+  - Streaming: ⏳ Next
 
 ### Planned for v1.0 📋
-- Client connection pooling
 - TLS/SSL (client & server)
 - Complete streaming support
 - Server-Sent Events (SSE)
