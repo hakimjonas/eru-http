@@ -2,7 +2,7 @@ import Dependencies.*
 // import sbtcrossproject.CrossPlugin.autoImport.{crossProject, CrossType}
 // import org.scalajs.sbtplugin.ScalaJSPlugin.autoImport._
 
-ThisBuild / scalaVersion := "3.7.3"
+ThisBuild / scalaVersion := "3.7.4"
 ThisBuild / semanticdbEnabled := true
 ThisBuild / semanticdbVersion := scalafixSemanticdb.revision
 ThisBuild / organization := "net.ghoula"
