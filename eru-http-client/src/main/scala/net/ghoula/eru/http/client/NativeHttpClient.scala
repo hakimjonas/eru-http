@@ -23,6 +23,7 @@ import net.ghoula.eru.prelude.*
 private[client] final class NativeHttpClient(
   config: HttpClientConfig,
   sslContext: Option[SSLContext],
+  pool: ConnectionPool,
   requestInterceptors: List[RequestInterceptor] = List.empty,
   responseInterceptors: List[ResponseInterceptor] = List.empty
 )(using runtime: EruRuntime)
@@ -124,32 +125,59 @@ private[client] final class NativeHttpClient(
         }
     } yield result
 
-  /** Execute a single HTTP request.
+  /** Execute a single HTTP request using connection pooling.
     *
-    * Simple blocking approach:
-    *   1. Connect to server (blocks on VT - efficient!)
-    *   2. Write request (blocks on VT - efficient!)
-    *   3. Read response (blocks on VT - efficient!)
-    *   4. Close connection
+    * Connection pooling approach:
+    *   1. Acquire connection from pool (may reuse existing)
+    *   2. Use connection for request/response
+    *   3. Release (for reuse) or remove (on error or close)
     */
   private def executeRequest(
     host: String,
     port: Int,
     request: Request[Body]
   ): Eru[HttpError, Response[Bytes]] = {
-    val requestEffect = for {
-      // Connect to server
-      socket <- connect(host, port)
+    for {
+      // Get connection from pool
+      conn <- pool.acquire(host, port)
 
+      // Use connection (with error handling)
+      result <- useConnection(conn, request).attempt
+
+      // Release or remove based on result
+      _ <- result match {
+        case Result.Success(response) =>
+          if shouldReuseConnection(response) then pool.release(conn)
+          else pool.remove(conn)
+
+        case Result.Failure(_) =>
+          pool.remove(conn) // Error - discard connection
+      }
+
+      // Return response or error
+      response <- result match {
+        case Result.Success(r) => Eru.succeed(r)
+        case Result.Failure(e) => Eru.fail(e)
+      }
+    } yield response
+  }
+
+  /** Use a pooled connection for a single request/response cycle.
+    */
+  private def useConnection(
+    conn: PooledConnection,
+    request: Request[Body]
+  ): Eru[HttpError, Response[Bytes]] = {
+    for {
       // Wrap with TLS if needed
       secureSocket <-
         if request.uri.scheme.contains("https") then {
           sslContext match {
-            case Some(ctx) => wrapWithTLS(socket, host, port, ctx)
+            case Some(ctx) => wrapWithTLS(conn.socket, request.uri.host.getOrElse(""), conn.port, ctx)
             case None => Eru.fail(HttpError.NetworkError("HTTPS requested but no SSL context configured", None))
           }
         } else {
-          Eru.succeed(socket)
+          Eru.succeed(conn.socket)
         }
 
       // Add cookies from jar
@@ -217,36 +245,21 @@ private[client] final class NativeHttpClient(
       responseBytes = convertBodyToBytes(response)
 
     } yield responseBytes
-
-    // TODO: Properly track and close socket
-    requestEffect
   }
 
-  /** Connect to server (blocking)
+  /** Determine if a connection should be reused based on HTTP/1.1 keep-alive semantics.
+    *
+    * Connection is reused if:
+    *   - Response doesn't have Connection: close
+    *   - HTTP/1.1 (keep-alive is default) OR has Connection: keep-alive
     */
-  private def connect(host: String, port: Int): Eru[HttpError, SocketChannel] = {
-    val connectEffect = Eru.effect {
-      val socket = SocketChannel.open()
-      socket.configureBlocking(true) // Blocking is GOOD on Virtual Threads!
-      socket.connect(new InetSocketAddress(host, port))
-      socket
-    }
+  private def shouldReuseConnection(response: Response[Bytes]): Boolean = {
+    val connHeader = response.headers
+      .getFirst(HeaderNames.Connection)
+      .map(_.value.toLowerCase)
 
-    connectEffect.attempt.flatMap {
-      case Result.Success(socket) => Eru.succeed(socket)
-      case Result.Failure(e: java.net.ConnectException) =>
-        Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
-      case Result.Failure(e) =>
-        Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
-    }
-      .timeout(java.time.Duration.ofMillis(config.connectTimeout.toMillis))
-      .mapError {
-        case _: TimeoutException =>
-          HttpError.ConnectionError(s"Connection timeout after ${config.connectTimeout}", None)
-        case e: HttpError => e
-        case e: Throwable =>
-          HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e))
-      }
+    if connHeader.contains("close") then false
+    else response.version == HttpVersion.HTTP_1_1 || connHeader.contains("keep-alive")
   }
 
   /** Wrap socket with TLS/SSL
@@ -314,16 +327,13 @@ private[client] final class NativeHttpClient(
     } yield result
 
   def shutdown: Eru[Nothing, Unit] =
-    Eru.effectTotal {
-      // No event loops to shut down!
-      // Connection pooling cleanup would go here if implemented
-      ()
-    }
+    pool.shutdown.orElse(Eru.unit)
 
   def withRequestInterceptor(interceptor: RequestInterceptor): HttpClient =
     new NativeHttpClient(
       config,
       sslContext,
+      pool,
       requestInterceptors :+ interceptor,
       responseInterceptors
     )
@@ -332,6 +342,7 @@ private[client] final class NativeHttpClient(
     new NativeHttpClient(
       config,
       sslContext,
+      pool,
       requestInterceptors,
       responseInterceptors :+ interceptor
     )
@@ -345,7 +356,7 @@ private[client] object NativeHttpClient {
     *   - No EventLoopGroup to manage
     *   - No Bootstrap configuration
     *   - No ChannelInitializer setup
-    *   - Just pure Eru effects + blocking NIO
+    *   - Just pure Eru effects + blocking NIO + connection pooling
     */
   def create(config: HttpClientConfig)(using runtime: EruRuntime): Eru[HttpError, NativeHttpClient] =
     for {
@@ -355,7 +366,8 @@ private[client] object NativeHttpClient {
         } else {
           Eru.succeed(None)
         }
-    } yield new NativeHttpClient(config, sslContext)
+      pool <- ConnectionPool.create(config)
+    } yield new NativeHttpClient(config, sslContext, pool)
 
   /** Create SSL context from TLS configuration
     */
