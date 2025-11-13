@@ -15,7 +15,7 @@ import net.ghoula.eru.prelude.*
   * This implementation demonstrates the power of Eru's Virtual Thread backend:
   *   - Each request runs on its own Virtual Thread
   *   - Blocking I/O is efficient (~10KB per thread vs ~2MB for OS threads)
-  *   - Connection pooling with Eru Ref for structured concurrency
+  *   - Connection pooling with concurrent data structures for resource reuse
   *   - Simple, readable code with no event loops or callbacks
   *
   * Compare to NettyHttpClient: ~200 lines vs 402 lines (50% reduction)
@@ -23,6 +23,7 @@ import net.ghoula.eru.prelude.*
 private[client] final class NativeHttpClient(
   config: HttpClientConfig,
   sslContext: Option[SSLContext],
+  pool: ConnectionPool,
   requestInterceptors: List[RequestInterceptor] = List.empty,
   responseInterceptors: List[ResponseInterceptor] = List.empty
 )(using runtime: EruRuntime)
@@ -124,129 +125,139 @@ private[client] final class NativeHttpClient(
         }
     } yield result
 
-  /** Execute a single HTTP request.
+  /** Execute a single HTTP request using connection pooling.
     *
-    * Simple blocking approach:
-    *   1. Connect to server (blocks on VT - efficient!)
-    *   2. Write request (blocks on VT - efficient!)
-    *   3. Read response (blocks on VT - efficient!)
-    *   4. Close connection
+    * Connection pooling approach:
+    *   1. Acquire connection from pool (or create new)
+    *   2. Write request and read response
+    *   3. Release connection back to pool (if keep-alive) OR remove (if error/close)
     */
   private def executeRequest(
     host: String,
     port: Int,
     request: Request[Body]
   ): Eru[HttpError, Response[Bytes]] = {
-    val requestEffect = for {
-      // Connect to server
-      socket <- connect(host, port)
-
-      // Wrap with TLS if needed
-      secureSocket <-
-        if request.uri.scheme.contains("https") then {
-          sslContext match {
-            case Some(ctx) => wrapWithTLS(socket, host, port, ctx)
-            case None => Eru.fail(HttpError.NetworkError("HTTPS requested but no SSL context configured", None))
-          }
-        } else {
-          Eru.succeed(socket)
-        }
-
-      // Add cookies from jar
-      requestWithCookies <- config.cookieJar match {
-        case Some(jar) =>
-          jar.getCookies(request.uri).flatMap { cookies =>
-            if cookies.nonEmpty then {
-              val cookieHeader = cookies.map(_.toCookieHeader).mkString("; ")
-              request.headers
-                .add(HeaderNames.Cookie, cookieHeader)
-                .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid cookie: $e", "RFC 6265")))
-                .map(newHeaders => request.copy(headers = newHeaders))
-            } else {
-              Eru.succeed(request)
+    // Acquire connection from pool
+    pool.acquire(host, port).flatMap { conn =>
+      val requestEffect = for {
+        // Wrap with TLS if needed
+        secureSocket <-
+          if request.uri.scheme.contains("https") then {
+            sslContext match {
+              case Some(ctx) => wrapWithTLS(conn.socket, host, port, ctx)
+              case None =>
+                Eru.fail(HttpError.NetworkError("HTTPS requested but no SSL context configured", None))
             }
+          } else {
+            Eru.succeed(conn.socket)
           }
-        case None => Eru.succeed(request)
+
+        // Add cookies from jar
+        requestWithCookies <- config.cookieJar match {
+          case Some(jar) =>
+            jar.getCookies(request.uri).flatMap { cookies =>
+              if cookies.nonEmpty then {
+                val cookieHeader = cookies.map(_.toCookieHeader).mkString("; ")
+                request.headers
+                  .add(HeaderNames.Cookie, cookieHeader)
+                  .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid cookie: $e", "RFC 6265")))
+                  .map(newHeaders => request.copy(headers = newHeaders))
+              } else {
+                Eru.succeed(request)
+              }
+            }
+          case None => Eru.succeed(request)
+        }
+
+        // Add Content-Length header if not present and body is not empty
+        requestWithContentLength <-
+          if !requestWithCookies.headers.contains(HeaderNames.ContentLength) then {
+            requestWithCookies.body match {
+              case Body.Empty => Eru.succeed(requestWithCookies)
+              case Body.Text(text, _, charset) =>
+                val contentLength = text.getBytes(charset.toJavaCharset).length
+                requestWithCookies.headers
+                  .add(HeaderNames.ContentLength, contentLength.toString)
+                  .mapError(e =>
+                    HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: $e", "RFC 9110"))
+                  )
+                  .map(newHeaders => requestWithCookies.copy(headers = newHeaders))
+              case Body.Binary(bytes, _) =>
+                requestWithCookies.headers
+                  .add(HeaderNames.ContentLength, bytes.length.toString)
+                  .mapError(e =>
+                    HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: $e", "RFC 9110"))
+                  )
+                  .map(newHeaders => requestWithCookies.copy(headers = newHeaders))
+              case Body.Stream(_, _, _) =>
+                // Don't set Content-Length for streams (would need Transfer-Encoding: chunked)
+                Eru.succeed(requestWithCookies)
+            }
+          } else {
+            Eru.succeed(requestWithCookies)
+          }
+
+        // Write request with timeout
+        _ <- HttpWriter
+          .writeRequest(secureSocket, requestWithContentLength)
+          .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
+          .mapError {
+            case _: TimeoutException => HttpError.TimeoutError(s"Write timeout after ${config.requestTimeout}")
+            case e: HttpError => e
+            case e: Throwable => HttpError.NetworkError(s"Write error: ${e.getMessage}", Some(e))
+          }
+
+        // Read response with timeout
+        response <- HttpParser
+          .parseResponse(secureSocket)
+          .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
+          .mapError {
+            case _: TimeoutException => HttpError.TimeoutError(s"Read timeout after ${config.requestTimeout}")
+            case e: HttpError => e
+            case e: Throwable => HttpError.NetworkError(s"Read error: ${e.getMessage}", Some(e))
+          }
+
+        // Convert body to Bytes
+        responseBytes = convertBodyToBytes(response)
+
+      } yield responseBytes
+
+      // Handle connection lifecycle based on result
+      requestEffect.attempt.flatMap {
+        case Result.Success(response) =>
+          // Check if connection should be reused
+          if shouldReuseConnection(response) then {
+            pool.release(conn).flatMap(_ => Eru.succeed(response))
+          } else {
+            pool.remove(conn).flatMap(_ => Eru.succeed(response))
+          }
+
+        case Result.Failure(error) =>
+          // Error occurred, discard connection
+          pool.remove(conn).flatMap(_ => Eru.fail(error))
       }
-
-      // Add Content-Length header if not present and body is not empty
-      requestWithContentLength <-
-        if !requestWithCookies.headers.contains(HeaderNames.ContentLength) then {
-          requestWithCookies.body match {
-            case Body.Empty => Eru.succeed(requestWithCookies)
-            case Body.Text(text, _, charset) =>
-              val contentLength = text.getBytes(charset.toJavaCharset).length
-              requestWithCookies.headers
-                .add(HeaderNames.ContentLength, contentLength.toString)
-                .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: $e", "RFC 9110")))
-                .map(newHeaders => requestWithCookies.copy(headers = newHeaders))
-            case Body.Binary(bytes, _) =>
-              requestWithCookies.headers
-                .add(HeaderNames.ContentLength, bytes.length.toString)
-                .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: $e", "RFC 9110")))
-                .map(newHeaders => requestWithCookies.copy(headers = newHeaders))
-            case Body.Stream(_, _, _) =>
-              // Don't set Content-Length for streams (would need Transfer-Encoding: chunked)
-              Eru.succeed(requestWithCookies)
-          }
-        } else {
-          Eru.succeed(requestWithCookies)
-        }
-
-      // Write request with timeout
-      _ <- HttpWriter
-        .writeRequest(secureSocket, requestWithContentLength)
-        .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
-        .mapError {
-          case _: TimeoutException => HttpError.TimeoutError(s"Write timeout after ${config.requestTimeout}")
-          case e: HttpError => e
-          case e: Throwable => HttpError.NetworkError(s"Write error: ${e.getMessage}", Some(e))
-        }
-
-      // Read response with timeout
-      response <- HttpParser
-        .parseResponse(secureSocket)
-        .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
-        .mapError {
-          case _: TimeoutException => HttpError.TimeoutError(s"Read timeout after ${config.requestTimeout}")
-          case e: HttpError => e
-          case e: Throwable => HttpError.NetworkError(s"Read error: ${e.getMessage}", Some(e))
-        }
-
-      // Convert body to Bytes
-      responseBytes = convertBodyToBytes(response)
-
-    } yield responseBytes
-
-    // TODO: Properly track and close socket
-    requestEffect
+    }
   }
 
-  /** Connect to server (blocking)
+  /** Check if connection should be reused based on HTTP response headers.
+    *
+    * Follows HTTP/1.1 keep-alive semantics (similar to server implementation).
+    *
+    * Rules:
+    *   - If response has "Connection: close", don't reuse
+    *   - HTTP/1.1 defaults to keep-alive (unless explicit "close")
+    *   - HTTP/1.0 requires explicit "keep-alive" or "Keep-Alive" header
     */
-  private def connect(host: String, port: Int): Eru[HttpError, SocketChannel] = {
-    val connectEffect = Eru.effect {
-      val socket = SocketChannel.open()
-      socket.configureBlocking(true) // Blocking is GOOD on Virtual Threads!
-      socket.connect(new InetSocketAddress(host, port))
-      socket
-    }
+  private def shouldReuseConnection(response: Response[Bytes]): Boolean = {
+    val connectionHeader =
+      response.headers.getFirst(HeaderNames.Connection).map(_.value.toLowerCase)
 
-    connectEffect.attempt.flatMap {
-      case Result.Success(socket) => Eru.succeed(socket)
-      case Result.Failure(e: java.net.ConnectException) =>
-        Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
-      case Result.Failure(e) =>
-        Eru.fail(HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e)))
-    }
-      .timeout(java.time.Duration.ofMillis(config.connectTimeout.toMillis))
-      .mapError {
-        case _: TimeoutException =>
-          HttpError.ConnectionError(s"Connection timeout after ${config.connectTimeout}", None)
-        case e: HttpError => e
-        case e: Throwable =>
-          HttpError.ConnectionError(s"Failed to connect to $host:$port: ${e.getMessage}", Some(e))
-      }
+    // If server explicitly says "close", don't reuse
+    if connectionHeader.contains("close") then false
+    // HTTP/1.1 defaults to keep-alive
+    else if response.version == HttpVersion.HTTP_1_1 then true
+    // HTTP/1.0 requires explicit "keep-alive"
+    else connectionHeader.contains("keep-alive")
   }
 
   /** Wrap socket with TLS/SSL
@@ -314,16 +325,13 @@ private[client] final class NativeHttpClient(
     } yield result
 
   def shutdown: Eru[Nothing, Unit] =
-    Eru.effectTotal {
-      // No event loops to shut down!
-      // Connection pooling cleanup would go here if implemented
-      ()
-    }
+    pool.shutdown.mapError(_ => ()).orElse(Eru.unit)
 
   def withRequestInterceptor(interceptor: RequestInterceptor): HttpClient =
     new NativeHttpClient(
       config,
       sslContext,
+      pool,
       requestInterceptors :+ interceptor,
       responseInterceptors
     )
@@ -332,6 +340,7 @@ private[client] final class NativeHttpClient(
     new NativeHttpClient(
       config,
       sslContext,
+      pool,
       requestInterceptors,
       responseInterceptors :+ interceptor
     )
@@ -339,13 +348,13 @@ private[client] final class NativeHttpClient(
 
 private[client] object NativeHttpClient {
 
-  /** Create a native HTTP client.
+  /** Create a native HTTP client with connection pooling.
     *
     * This is dramatically simpler than NettyHttpClient.create:
     *   - No EventLoopGroup to manage
     *   - No Bootstrap configuration
     *   - No ChannelInitializer setup
-    *   - Just pure Eru effects + blocking NIO
+    *   - Just pure Eru effects + blocking NIO + connection pooling
     */
   def create(config: HttpClientConfig)(using runtime: EruRuntime): Eru[HttpError, NativeHttpClient] =
     for {
@@ -355,7 +364,8 @@ private[client] object NativeHttpClient {
         } else {
           Eru.succeed(None)
         }
-    } yield new NativeHttpClient(config, sslContext)
+      pool <- ConnectionPool.create(config, config.connectTimeout)
+    } yield new NativeHttpClient(config, sslContext, pool)
 
   /** Create SSL context from TLS configuration
     */
