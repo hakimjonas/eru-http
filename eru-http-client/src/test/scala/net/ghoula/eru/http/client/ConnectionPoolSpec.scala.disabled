@@ -8,8 +8,11 @@ import scala.concurrent.duration.*
 
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
+import net.ghoula.eru.prelude.{given, *}
 
 class ConnectionPoolSpec extends FunSuite {
+
+  given runtime: EruRuntime = EruRuntime.create()
 
   // Test helpers
   extension [E, A](eru: Eru[E, A]) {

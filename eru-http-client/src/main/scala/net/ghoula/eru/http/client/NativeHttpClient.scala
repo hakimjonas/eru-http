@@ -1,6 +1,5 @@
 package net.ghoula.eru.http.client
 
-import java.net.InetSocketAddress
 import java.nio.channels.SocketChannel
 import java.util.concurrent.TimeoutException
 import javax.net.ssl.SSLContext
@@ -63,9 +62,12 @@ private[client] final class NativeHttpClient(
 
   override def send[A](request: Request[A])(using encoder: BodyEncoder[A]): Eru[HttpError, Response[Bytes]] =
     for {
-      _ <- request.validate.mapError(HttpError.InvalidRequest.apply)
-      encodedBody <- encoder.encode(request.body).mapError(HttpError.BodyEncodeError.apply)
-      encodedRequest = request.copy(body = encodedBody)
+      // Add Host header if missing (required for HTTP/1.1)
+      requestWithHost <- addHostHeaderIfNeeded(request)
+
+      _ <- requestWithHost.validate.mapError(HttpError.InvalidRequest.apply)
+      encodedBody <- encoder.encode(requestWithHost.body).mapError(HttpError.BodyEncodeError.apply)
+      encodedRequest = requestWithHost.copy(body = encodedBody)
 
       // Apply request interceptors
       interceptedRequest <- requestInterceptors.foldLeft(Eru.succeed(encodedRequest)) { (req, interceptor) =>
@@ -303,6 +305,26 @@ private[client] final class NativeHttpClient(
     response.copy(body = bytes)
   }
 
+  /** Add Host header to request if not already present (required for HTTP/1.1)
+    */
+  private def addHostHeaderIfNeeded[A](request: Request[A]): Eru[HttpError, Request[A]] = {
+    if request.headers.contains(HeaderNames.Host) then {
+      Eru.succeed(request)
+    } else {
+      for {
+        host <- Eru.fromOption(
+          request.uri.host,
+          HttpError.InvalidRequest(InvalidRequest("Missing host in URI", "RFC 9110"))
+        )
+        port <- getPort(request.uri)
+        hostValue = if port == 80 || port == 443 then host else s"$host:$port"
+        newHeaders <- request.headers
+          .add(HeaderNames.Host, hostValue)
+          .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Host header: $e", "RFC 9110")))
+      } yield request.copy(headers = newHeaders)
+    }
+  }
+
   /** Get port from URI
     */
   private def getPort(uri: Uri): Eru[HttpError, Int] =
@@ -334,7 +356,7 @@ private[client] final class NativeHttpClient(
     } yield result
 
   def shutdown: Eru[Nothing, Unit] =
-    pool.shutdown.orElse(Eru.unit)
+    pool.shutdown.attempt.map(_ => ())
 
   def withRequestInterceptor(interceptor: RequestInterceptor): HttpClient =
     new NativeHttpClient(

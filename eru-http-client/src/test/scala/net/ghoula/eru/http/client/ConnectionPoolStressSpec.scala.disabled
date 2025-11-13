@@ -1,0 +1,138 @@
+package net.ghoula.eru.http.client
+
+import munit.FunSuite
+
+import java.nio.channels.SocketChannel
+import java.time.Instant
+import scala.concurrent.duration.*
+
+import net.ghoula.eru.*
+import net.ghoula.eru.http.*
+import net.ghoula.eru.prelude.*
+
+/** Stress tests for connection pool Ref contention.
+  *
+  * These tests specifically target Eru's Ref primitive to validate:
+  *   1. Correctness under high concurrent load
+  *   2. CAS retry behavior
+  *   3. Performance characteristics
+  *   4. Absence of race conditions or deadlocks
+  *
+  * This is DOGFOODING - we're validating Eru's Ref works correctly!
+  */
+class ConnectionPoolStressSpec extends FunSuite {
+
+  given runtime: EruRuntime = EruRuntime.create()
+
+  val testConfig: HttpClientConfig = HttpClientConfig(
+    connectTimeout = 5.seconds,
+    requestTimeout = 5.seconds,
+    maxConnections = 50,
+    maxConnectionsPerHost = 10
+  )
+
+  test("ConnectionPool - 100 concurrent acquire/release cycles") {
+    val pool = ConnectionPool.create(testConfig).unsafeRunSync()
+
+    // Create mock connections
+    val mockConnections = (1 to 10).map { i =>
+      val socket = createMockSocket()
+      PooledConnection(socket, s"host$i.com", 80, Instant.now(), Instant.now())
+    }.toList
+
+    // Simulate 100 concurrent acquire/release cycles
+    val operations = (1 to 100).map { i =>
+      val hostIndex = i % 10
+      val conn = mockConnections(hostIndex)
+
+      for {
+        // Simulate releasing a connection (as if it was already acquired)
+        _ <- pool.release(conn)
+        // Now acquire it
+        acquired <- pool.acquire(conn.host, conn.port)
+        // Release it again
+        _ <- pool.release(acquired)
+      } yield ()
+    }.toList
+
+    val result = parSequence(operations).attempt.unsafeRunSync()
+
+    result match {
+      case Result.Success(_) =>
+        // Success! Ref handled 100 concurrent operations correctly
+        assert(true)
+      case Result.Failure(error) =>
+        fail(s"Concurrent operations failed: $error")
+    }
+
+    pool.shutdown.unsafeRunSync()
+  }
+
+  test("ConnectionPool - stress test with rapid acquire/release") {
+    val pool = ConnectionPool.create(testConfig).unsafeRunSync()
+
+    // 200 rapid acquire/release operations
+    val operations = (1 to 200).map { i =>
+      val host = s"rapid${i % 5}.com" // 5 different hosts
+
+      for {
+        // Try to acquire (will create new connection since pool is empty)
+        connResult <- pool.acquire(host, 80).attempt
+        // If successful, immediately release
+        _ <- connResult match {
+          case Result.Success(conn) => pool.release(conn)
+          case Result.Failure(_) => Eru.unit // Ignore failures (pool exhaustion is OK)
+        }
+      } yield connResult.isSuccess
+    }.toList
+
+    val results = parSequence(operations).attempt.unsafeRunSync()
+
+    results match {
+      case Result.Success(successes) =>
+        val successCount = successes.count(identity)
+        // Should have some successes
+        assert(successCount > 0, s"Expected some successful operations, got $successCount out of 200")
+        println(s"Rapid stress test: $successCount out of 200 operations succeeded")
+      case Result.Failure(error) =>
+        fail(s"Stress test failed: $error")
+    }
+
+    pool.shutdown.unsafeRunSync()
+  }
+
+  test("ConnectionPool - measure Ref contention with state inspection") {
+    val pool = ConnectionPool.create(testConfig).unsafeRunSync()
+
+    // Perform 50 concurrent modifications
+    val operations = (1 to 50).map { i =>
+      val host = s"contention${i % 3}.com"
+      pool.acquire(host, 80).attempt
+    }.toList
+
+    val start = System.nanoTime()
+    val results = parSequence(operations).unsafeRunSync()
+    val end = System.nanoTime()
+
+    val durationMs = (end - start) / 1_000_000.0
+    val successCount = results.count(_.isSuccess)
+
+    println(s"Contention test: $successCount out of 50 succeeded in ${durationMs}ms")
+    println(s"Average time per operation: ${durationMs / 50.0}ms")
+
+    // Cleanup
+    results.foreach {
+      case Result.Success(conn) => pool.release(conn).unsafeRunSync()
+      case _ => ()
+    }
+
+    pool.shutdown.unsafeRunSync()
+  }
+
+  // Helper to create mock socket (won't actually connect)
+  private def createMockSocket(): SocketChannel = {
+    val socket = SocketChannel.open()
+    socket.configureBlocking(false)
+    socket
+  }
+}

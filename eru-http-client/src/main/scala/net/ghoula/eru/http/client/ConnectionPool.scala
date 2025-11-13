@@ -135,7 +135,8 @@ object ConnectionPool {
     */
   def create(config: HttpClientConfig)(using runtime: EruRuntime): Eru[HttpError, ConnectionPool] =
     for {
-      stateRef <- Ref.make(PoolState.empty)
+      stateRef <- Ref
+        .make(PoolState.empty)
         .mapError(e => HttpError.NetworkError(s"Failed to create pool state: $e", None))
     } yield new NativeConnectionPool(stateRef, config, config.connectTimeout)
 }
@@ -241,12 +242,9 @@ private[client] final class NativeConnectionPool(
         val hostConns = state.hostConnections(host, port)
         val totalConns = state.totalConnections
 
-        if hostConns >= config.maxConnectionsPerHost then
-          (state, AcquireDecision.HostLimit)
-        else if totalConns >= config.maxConnections then
-          (state, AcquireDecision.GlobalLimit)
-        else
-          (state, AcquireDecision.CreateNew)
+        if hostConns >= config.maxConnectionsPerHost then (state, AcquireDecision.HostLimit)
+        else if totalConns >= config.maxConnections then (state, AcquireDecision.GlobalLimit)
+        else (state, AcquireDecision.CreateNew)
     }
   }
 
@@ -328,9 +326,11 @@ private[client] final class NativeConnectionPool(
   }
 
   private def closeAllConnections(connections: List[PooledConnection]): Eru[HttpError, Unit] = {
-    Eru.foreach(connections) { conn =>
-      closeSocket(conn.socket).orElse(Eru.unit)
-    }.map(_ => ())
+    Eru
+      .foreach(connections) { conn =>
+        closeSocket(conn.socket).orElse(Eru.unit)
+      }
+      .map(_ => ())
   }
 
   private def createConnection(host: String, port: Int): Eru[HttpError, PooledConnection] = {
@@ -341,39 +341,31 @@ private[client] final class NativeConnectionPool(
   }
 
   private def connectSocket(host: String, port: Int): Eru[HttpError, SocketChannel] = {
-    val connectEffect = Eru.effect {
-      val socket = SocketChannel.open()
-      socket.configureBlocking(true)
-      socket.connect(new InetSocketAddress(host, port))
-      socket
-    }
-
-    for {
-      result <- connectEffect.attempt
-      socket <- result match {
-        case Result.Success(socket) =>
-          Eru.succeed(socket)
-        case Result.Failure(e) =>
-          Eru.fail(
-            HttpError.ConnectionError(
-              s"Failed to connect to $host:$port: ${e.getMessage}",
-              Some(e)
-            )
-          )
+    Eru
+      .effect {
+        val socket = SocketChannel.open()
+        socket.configureBlocking(true)
+        socket.connect(new InetSocketAddress(host, port))
+        socket
       }
-      withTimeout <- socket
-        .timeout(java.time.Duration.ofMillis(connectTimeout.toMillis))
-        .mapError {
-          case e: HttpError => e
-          case e => HttpError.ConnectionError(s"Connection timeout: ${e.getMessage}", Some(e))
-        }
-    } yield withTimeout
+      .mapError { e =>
+        HttpError.ConnectionError(
+          s"Failed to connect to $host:$port: ${e.getMessage}",
+          Some(e)
+        )
+      }
+      .timeout(java.time.Duration.ofMillis(connectTimeout.toMillis))
+      .mapError {
+        case e: HttpError => e
+        case e: Throwable => HttpError.TimeoutError(s"Connection timeout to $host:$port: ${e.getMessage}")
+      }
   }
 
   // Helper effects
 
   private def currentTime: Eru[HttpError, Instant] = {
-    Eru.effect(Instant.now())
+    Eru
+      .effect(Instant.now())
       .mapError(e => HttpError.NetworkError(s"Failed to get current time: ${e.getMessage}", Some(e)))
   }
 

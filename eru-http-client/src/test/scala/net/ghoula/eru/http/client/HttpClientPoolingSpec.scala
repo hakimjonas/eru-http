@@ -20,6 +20,8 @@ import net.ghoula.eru.prelude.*
   */
 class HttpClientPoolingSpec extends FunSuite {
 
+  given runtime: EruRuntime = EruRuntime.create()
+
   // Test helpers
   extension [E, A](eru: Eru[E, A]) {
     def assertSuccess(using loc: Location): A = {
@@ -46,7 +48,7 @@ class HttpClientPoolingSpec extends FunSuite {
     try {
       val client = HttpClient.create(HttpClientConfig.default).assertSuccess
 
-      val request = Request.get(server.url("/"))
+      val request = Request.get(Uri.parse(server.url("/")).assertSuccess)
       val response = client.send(request).assertSuccess
 
       assertEquals(response.status, StatusCode.Ok)
@@ -71,7 +73,7 @@ class HttpClientPoolingSpec extends FunSuite {
     try {
       val client = HttpClient.create(HttpClientConfig.default).assertSuccess
 
-      val request = Request.get(server.url("/"))
+      val request = Request.get(Uri.parse(server.url("/")).assertSuccess)
 
       // Make 5 sequential requests
       val responses = (1 to 5).map { _ =>
@@ -99,10 +101,10 @@ class HttpClientPoolingSpec extends FunSuite {
 
       // Make 10 concurrent requests
       val requests = (1 to 10).map { i =>
-        Request.get(server.url(s"/request$i"))
+        Request.get(Uri.parse(server.url(s"/request$i")).assertSuccess)
       }
 
-      val responses = Eru.foreachPar(requests) { request =>
+      val responses = parTraverse(requests.toList) { request =>
         client.send(request)
       }.assertSuccess
 
@@ -132,7 +134,7 @@ class HttpClientPoolingSpec extends FunSuite {
     try {
       val client = HttpClient.create(HttpClientConfig.default).assertSuccess
 
-      val request = Request.get(server.url("/"))
+      val request = Request.get(Uri.parse(server.url("/")).assertSuccess)
 
       // Make 3 sequential requests - each should create new connection
       val responses = (1 to 3).map { _ =>
@@ -164,7 +166,7 @@ class HttpClientPoolingSpec extends FunSuite {
     try {
       val client = HttpClient.create(HttpClientConfig.default).assertSuccess
 
-      val request = Request.get(server.url("/"))
+      val request = Request.get(Uri.parse(server.url("/")).assertSuccess)
 
       // Make 5 sequential requests - should reuse connection
       val responses = (1 to 5).map { _ =>
@@ -202,11 +204,11 @@ class HttpClientPoolingSpec extends FunSuite {
 
       // Try to make 5 concurrent requests to same host
       val requests = (1 to 5).map { i =>
-        Request.get(server.url(s"/request$i"))
+        Request.get(Uri.parse(server.url(s"/request$i")).assertSuccess)
       }
 
       // This should work but be limited by pool
-      val responses = Eru.foreachPar(requests) { request =>
+      val responses = parTraverse(requests.toList) { request =>
         client.send(request)
       }.assertSuccess
 
@@ -235,15 +237,17 @@ class HttpClientPoolingSpec extends FunSuite {
 
       // Make requests to both servers
       val requests = List(
-        Request.get(server1.url("/")),
-        Request.get(server1.url("/")),
-        Request.get(server2.url("/")),
-        Request.get(server2.url("/"))
+        Request.get(Uri.parse(server1.url("/")).assertSuccess),
+        Request.get(Uri.parse(server1.url("/")).assertSuccess),
+        Request.get(Uri.parse(server2.url("/")).assertSuccess),
+        Request.get(Uri.parse(server2.url("/")).assertSuccess)
       )
 
-      val responses = Eru.foreach(requests) { request =>
-        client.send(request)
-      }.assertSuccess
+      val responses = Eru
+        .foreach(requests) { request =>
+          client.send(request)
+        }
+        .assertSuccess
 
       assertEquals(responses.length, 4)
 
@@ -260,17 +264,24 @@ class HttpClientPoolingSpec extends FunSuite {
     val server = TestHttpServer.simple(body = "OK")
 
     try {
-      val client = HttpClient.create(HttpClientConfig.default).assertSuccess
+      // Use shorter timeout for this test since we expect connection failures
+      val config = HttpClientConfig(
+        connectTimeout = 1.second,
+        requestTimeout = 1.second,
+        maxConnections = 10,
+        maxConnectionsPerHost = 5
+      )
+      val client = HttpClient.create(config).assertSuccess
 
       // Valid request
-      val request1 = Request.get(server.url("/"))
+      val request1 = Request.get(Uri.parse(server.url("/")).assertSuccess)
       val response1 = client.send(request1).assertSuccess
       assertEquals(response1.status, StatusCode.Ok)
 
-      // Now shutdown server and try again - should fail
+      // Now shutdown server and try again - should fail quickly
       server.shutdown()
 
-      val request2 = Request.get(s"http://localhost:${server.port}/")
+      val request2 = Request.get(Uri.parse(s"http://localhost:${server.port}/").assertSuccess)
       val error = client.send(request2).assertFailure
 
       error match {
@@ -300,10 +311,10 @@ class HttpClientPoolingSpec extends FunSuite {
 
       // Make 100 concurrent requests
       val requests = (1 to 100).map { i =>
-        Request.get(server.url(s"/stress$i"))
+        Request.get(Uri.parse(server.url(s"/stress$i")).assertSuccess)
       }
 
-      val responses = Eru.foreachPar(requests) { request =>
+      val responses = parTraverse(requests.toList) { request =>
         client.send(request)
       }.assertSuccess
 
@@ -330,21 +341,23 @@ class HttpClientPoolingSpec extends FunSuite {
 
       // First make 20 sequential requests
       val sequentialRequests = (1 to 20).map { i =>
-        Request.get(server.url(s"/seq$i"))
+        Request.get(Uri.parse(server.url(s"/seq$i")).assertSuccess)
       }
 
-      val sequentialResponses = Eru.foreach(sequentialRequests) { request =>
-        client.send(request)
-      }.assertSuccess
+      val sequentialResponses = Eru
+        .foreach(sequentialRequests) { request =>
+          client.send(request)
+        }
+        .assertSuccess
 
       assertEquals(sequentialResponses.length, 20)
 
       // Then make 50 concurrent requests
       val concurrentRequests = (1 to 50).map { i =>
-        Request.get(server.url(s"/con$i"))
+        Request.get(Uri.parse(server.url(s"/con$i")).assertSuccess)
       }
 
-      val concurrentResponses = Eru.foreachPar(concurrentRequests) { request =>
+      val concurrentResponses = parTraverse(concurrentRequests.toList) { request =>
         client.send(request)
       }.assertSuccess
 
@@ -380,10 +393,10 @@ class HttpClientPoolingSpec extends FunSuite {
           case 1 => server2
           case 2 => server3
         }
-        Request.get(server.url(s"/req$i"))
+        Request.get(Uri.parse(server.url(s"/req$i")).assertSuccess)
       }
 
-      val responses = Eru.foreachPar(requests) { request =>
+      val responses = parTraverse(requests.toList) { request =>
         client.send(request)
       }.assertSuccess
 
@@ -410,7 +423,7 @@ class HttpClientPoolingSpec extends FunSuite {
 
       // Make some requests to populate pool
       (1 to 5).foreach { _ =>
-        client.send(Request.get(server.url("/"))).assertSuccess
+        client.send(Request.get(Uri.parse(server.url("/")).assertSuccess)).assertSuccess
       }
 
       // Shutdown should succeed and close all connections
@@ -441,12 +454,14 @@ class HttpClientPoolingSpec extends FunSuite {
       // Make many sequential requests with Connection: close
       // This tests that removed connections are properly cleaned up
       val requests = (1 to 50).map { i =>
-        Request.get(server.url(s"/rapid$i"))
+        Request.get(Uri.parse(server.url(s"/rapid$i")).assertSuccess)
       }
 
-      val responses = Eru.foreach(requests) { request =>
-        client.send(request)
-      }.assertSuccess
+      val responses = Eru
+        .foreach(requests) { request =>
+          client.send(request)
+        }
+        .assertSuccess
 
       assertEquals(responses.length, 50)
       responses.foreach { response =>
