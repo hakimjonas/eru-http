@@ -138,28 +138,32 @@ private[client] final class NativeHttpClient(
     request: Request[Body]
   ): Eru[HttpError, Response[Bytes]] = {
     for {
-      // Get connection from pool
       conn <- pool.acquire(host, port)
-
-      // Use connection (with error handling)
       result <- useConnection(conn, request).attempt
-
-      // Release or remove based on result
-      _ <- result match {
-        case Result.Success(response) =>
-          if shouldReuseConnection(response) then pool.release(conn)
-          else pool.remove(conn)
-
-        case Result.Failure(_) =>
-          pool.remove(conn) // Error - discard connection
-      }
-
-      // Return response or error
-      response <- result match {
-        case Result.Success(r) => Eru.succeed(r)
-        case Result.Failure(e) => Eru.fail(e)
-      }
+      _ <- handleConnectionResult(conn, result)
+      response <- fromResult(result)
     } yield response
+  }
+
+  private def handleConnectionResult(
+    conn: PooledConnection,
+    result: Result[HttpError, Response[Bytes]]
+  ): Eru[HttpError, Unit] = {
+    result match {
+      case Result.Success(response) =>
+        if shouldReuseConnection(response) then pool.release(conn)
+        else pool.remove(conn)
+
+      case Result.Failure(_) =>
+        pool.remove(conn)
+    }
+  }
+
+  private def fromResult[E, A](result: Result[E, A]): Eru[E, A] = {
+    result match {
+      case Result.Success(a) => Eru.succeed(a)
+      case Result.Failure(e) => Eru.fail(e)
+    }
   }
 
   /** Use a pooled connection for a single request/response cycle.
@@ -258,8 +262,11 @@ private[client] final class NativeHttpClient(
       .getFirst(HeaderNames.Connection)
       .map(_.value.toLowerCase)
 
-    if connHeader.contains("close") then false
-    else response.version == HttpVersion.HTTP_1_1 || connHeader.contains("keep-alive")
+    val hasClose = connHeader.contains("close")
+    val isHttp11 = response.version == HttpVersion.HTTP_1_1
+    val hasKeepAlive = connHeader.contains("keep-alive")
+
+    !hasClose && (isHttp11 || hasKeepAlive)
   }
 
   /** Wrap socket with TLS/SSL
