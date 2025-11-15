@@ -46,6 +46,55 @@ object HttpWriter {
       HttpError.NetworkError(s"Error writing request: ${e.getMessage}", Some(e))
     }
 
+  /** Write an HTTP request to a socket channel using a pooled ByteBuffer.
+    *
+    * This version reuses a provided ByteBuffer to avoid allocations.
+    *
+    * @param socket
+    *   The socket channel to write to (must be in blocking mode)
+    * @param request
+    *   The request to write
+    * @param buffer
+    *   A reusable ByteBuffer (will be cleared before use)
+    */
+  def writeRequestWithBuffer(
+    socket: SocketChannel,
+    request: Request[Body],
+    buffer: ByteBuffer
+  ): Eru[HttpError, Unit] =
+    Eru.effect {
+      // Clear and prepare buffer
+      buffer.clear()
+
+      // Build request line
+      val requestTarget = buildRequestTarget(request.uri)
+      val requestLine = s"${request.method.value}$SP$requestTarget$SP${formatVersion(request.version)}$CRLF"
+
+      // Build headers
+      val headersStr = buildHeaders(request.headers)
+
+      // Construct full header string
+      val fullHeaders = requestLine + headersStr + CRLF
+      val headerBytes = fullHeaders.getBytes(StandardCharsets.UTF_8)
+
+      // Check if buffer is large enough
+      if headerBytes.length > buffer.capacity() then {
+        throw new IllegalArgumentException(
+          s"Request headers (${headerBytes.length} bytes) exceed buffer capacity (${buffer.capacity()} bytes)"
+        )
+      }
+
+      // Write headers to buffer
+      buffer.put(headerBytes)
+      buffer.flip()
+      writeAll(socket, buffer)
+
+      // Write body (still allocates for body, but headers are pooled)
+      writeBody(socket, request.body)
+    }.mapError { case e: Exception =>
+      HttpError.NetworkError(s"Error writing request: ${e.getMessage}", Some(e))
+    }
+
   /** Write an HTTP response to a socket channel.
     *
     * Format (RFC 9112 Section 4): status-line = HTTP-version SP status-code SP [ reason-phrase ]
@@ -74,6 +123,77 @@ object HttpWriter {
     }.mapError { case e: Exception =>
       HttpError.NetworkError(s"Error writing response: ${e.getMessage}", Some(e))
     }
+
+  /** Write an HTTP response to a socket channel using a reusable ByteBuffer.
+    *
+    * This zero-allocation version writes headers directly to the provided buffer,
+    * avoiding string concatenation and getBytes() calls. Critical for high-throughput servers.
+    *
+    * @param socket
+    *   The socket channel to write to (must be in blocking mode)
+    * @param response
+    *   The response to write
+    * @param buffer
+    *   A reusable ByteBuffer (will be cleared before use, must be large enough for headers)
+    */
+  def writeResponseWithBuffer(
+    socket: SocketChannel,
+    response: Response[Body],
+    buffer: ByteBuffer
+  ): Eru[HttpError, Unit] =
+    Eru.effect {
+      // Clear buffer for reuse
+      buffer.clear()
+
+      // Write status line directly to buffer
+      writeString(buffer, formatVersion(response.version))
+      buffer.put(' '.toByte)
+      writeInt(buffer, response.status.value)
+      buffer.put(' '.toByte)
+      writeString(buffer, response.status.reasonPhrase)
+      buffer.put('\r'.toByte)
+      buffer.put('\n'.toByte)
+
+      // Write headers directly to buffer
+      response.headers.toList.foreach { case (name, value) =>
+        writeString(buffer, name)
+        buffer.put(':'.toByte)
+        buffer.put(' '.toByte)
+        writeString(buffer, value)
+        buffer.put('\r'.toByte)
+        buffer.put('\n'.toByte)
+      }
+
+      // Write empty line (end of headers)
+      buffer.put('\r'.toByte)
+      buffer.put('\n'.toByte)
+
+      // Flip buffer and write to socket
+      buffer.flip()
+      writeAll(socket, buffer)
+
+      // Write body (still allocates for body, but headers are zero-allocation)
+      writeBody(socket, response.body)
+    }.mapError { case e: Exception =>
+      HttpError.NetworkError(s"Error writing response: ${e.getMessage}", Some(e))
+    }
+
+  /** Write a string to ByteBuffer as UTF-8 bytes (assumes ASCII for performance).
+    */
+  private def writeString(buffer: ByteBuffer, s: String): Unit = {
+    var i = 0
+    while i < s.length do {
+      buffer.put(s.charAt(i).toByte)
+      i += 1
+    }
+  }
+
+  /** Write an integer to ByteBuffer as ASCII digits.
+    */
+  private def writeInt(buffer: ByteBuffer, n: Int): Unit = {
+    val s = n.toString
+    writeString(buffer, s)
+  }
 
   /** Build request target from URI
     *

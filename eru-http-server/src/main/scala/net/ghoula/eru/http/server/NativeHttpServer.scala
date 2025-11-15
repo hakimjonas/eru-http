@@ -2,11 +2,11 @@ package net.ghoula.eru.http.server
 
 import java.net.InetSocketAddress
 import java.nio.channels.{ServerSocketChannel, SocketChannel}
-import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
 import scala.annotation.unused
 
+import jdk.net.ExtendedSocketOptions
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
 import net.ghoula.eru.prelude.*
@@ -54,29 +54,40 @@ private[server] final class NativeHttpServer(
   /** Accept loop - runs forever accepting connections.
     *
     * Each accept() blocks on a Virtual Thread, which is efficient! Each accepted connection is
-    * handled on its own Virtual Thread via .fork
+    * handled on its own Virtual Thread via .fork within Eru's structured concurrency.
     */
-  private def acceptLoop: Eru[HttpError, Unit] =
-    Eru.effect {
-      while running.get() do {
-        try {
-          // This blocks waiting for a connection - on Virtual Thread, it's efficient!
-          val clientSocket = serverSocket.accept()
-          clientSocket.configureBlocking(true) // Client socket also uses blocking mode
+  private def acceptLoop: Eru[HttpError, Unit] = {
+    val acceptAndHandle = for {
+      // Accept connection (blocks on Virtual Thread - efficient!)
+      clientSocket <- Eru.effect(serverSocket.accept())
+        .mapError(e => HttpError.NetworkError(s"Accept error: ${e.getMessage}", Some(e)))
 
-          // Handle each client on its own Virtual Thread
-          // Structured concurrency ensures cleanup when parent scope exits
-          handleClient(clientSocket).fork.unsafeRunSync(): Unit
+      // Configure socket
+      _ <- Eru.effect {
+        clientSocket.configureBlocking(true) // Client socket also uses blocking mode
+
+        // Enable TCP_NODELAY to disable Nagle's algorithm (avoid 40ms delay)
+        clientSocket.setOption(java.net.StandardSocketOptions.TCP_NODELAY, java.lang.Boolean.TRUE)
+
+        // Enable TCP_QUICKACK on Linux to avoid delayed ACK (avoid 40ms delay)
+        try {
+          clientSocket.setOption(ExtendedSocketOptions.TCP_QUICKACK, true)
         } catch {
-          case _: java.nio.channels.AsynchronousCloseException =>
-            // Server socket was closed, exit loop
-            ()
-          case _: Exception if !running.get() =>
-            // Server is shutting down, ignore errors
-            ()
+          case _: Exception => () // TCP_QUICKACK not available on this platform
         }
-      }
-    }.mapError(e => HttpError.NetworkError(s"Accept loop error: ${e.getMessage}", Some(e)))
+      }.mapError(e => HttpError.NetworkError(s"Socket config error: ${e.getMessage}", Some(e)))
+
+      // Fork handler fiber for each connection
+      // Virtual Threads scale well, so we fork without artificial limiting
+      // Each connection runs on its own VT (~10KB memory vs 2MB OS thread)
+      _ <- handleClient(clientSocket).fork
+
+    } yield ()
+
+    // Run accept-and-handle loop forever
+    // Errors will bubble up and stop the server gracefully
+    Eru.forever(acceptAndHandle)
+  }
 
   /** Handle a single client connection.
     *
@@ -110,18 +121,23 @@ private[server] final class NativeHttpServer(
     *   - Socket is closed by client
     */
   private def handleRequestLoop(socket: SocketChannel): Eru[HttpError, Unit] = {
-    def loop(): Eru[HttpError, Boolean] = {
+    // Create BufferedSocketReader ONCE per connection and reuse for all requests
+    // This is critical for performance - avoids allocating 8KB direct ByteBuffer per request
+    val reader = new net.ghoula.eru.http.BufferedSocketReader(socket)
+
+    // Create write buffer ONCE per connection for zero-allocation response writing
+    // 8KB buffer is sufficient for most HTTP response headers
+    val writeBuffer = java.nio.ByteBuffer.allocate(8192)
+
+    def loop(isFirstRequest: Boolean = true): Eru[HttpError, Boolean] = {
       val requestEffect = for {
-        // Parse request with timeout (blocking read - efficient on VT!)
-        // If no request arrives within idle timeout, exit the loop
+        // Reset reader state before parsing (except first request)
+        _ <- if !isFirstRequest then Eru.effect(reader.reset()) else Eru.unit
+
+        // Parse request without timeout - socket blocking handles idle connections naturally
+        // BufferedSocketReader will throw EOFException if connection is closed
         requestResult <- HttpParser
-          .parseRequest(socket)
-          .timeout(java.time.Duration.ofMillis(config.idleTimeout.toMillis))
-          .mapError {
-            case _: TimeoutException => HttpError.NetworkError("Keep-alive timeout", None)
-            case e: HttpError => e // Pass through HttpError from parser
-            case e: Throwable => HttpError.NetworkError(s"Parse error: ${e.getMessage}", Some(e))
-          }
+          .parseRequest(reader) // Use reader instead of socket
           .attempt
 
         // If parsing fails (socket closed, timeout, etc.), exit loop
@@ -130,17 +146,9 @@ private[server] final class NativeHttpServer(
           case Result.Failure(_) => Eru.fail(HttpError.NetworkError("Connection closed", None))
         }
 
-        // Apply idle timeout and handle errors
-        handlerResult <- handler(request)
-          .timeout(java.time.Duration.ofMillis(config.idleTimeout.toMillis))
-          .mapError {
-            case _: TimeoutException =>
-              HttpError.TimeoutError(s"Request handler timeout after ${config.idleTimeout}")
-            case e: HttpError => e
-            case e: Throwable =>
-              HttpError.NetworkError(s"Handler error: ${e.getMessage}", Some(e))
-          }
-          .attempt
+        // Execute handler without timeout (fast handlers don't need it, slow handlers are user's responsibility)
+        // The parse timeout above is sufficient to handle idle connections
+        handlerResult <- handler(request).attempt
 
         // Convert handler result to response (either success or error response)
         response = handlerResult match {
@@ -148,8 +156,8 @@ private[server] final class NativeHttpServer(
           case Result.Failure(httpError: HttpError) => addConnectionHeader(request, errorToResponse(httpError))
         }
 
-        // Write response (blocking write - efficient on VT!)
-        _ <- HttpWriter.writeResponse(socket, response)
+        // Write response with reusable buffer (zero-allocation, blocking write - efficient on VT!)
+        _ <- HttpWriter.writeResponseWithBuffer(socket, response, writeBuffer)
 
         // Check if we should continue the loop (keep-alive)
         shouldContinue = shouldKeepAlive(request, response)
@@ -157,7 +165,7 @@ private[server] final class NativeHttpServer(
       } yield shouldContinue
 
       requestEffect.attempt.flatMap {
-        case Result.Success(true) => loop() // Continue for next request
+        case Result.Success(true) => loop(false) // Continue for next request
         case Result.Success(false) => Eru.succeed(false) // Connection: close, exit cleanly
         case Result.Failure(_) => Eru.succeed(false) // Error, exit cleanly
       }

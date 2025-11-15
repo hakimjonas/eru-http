@@ -25,11 +25,14 @@ object BenchmarkServer {
     val handler: RequestHandler = req =>
       req.uri.path match {
         case "/" | "/plaintext" =>
+          val body = "Hello, World!"
           Eru.succeed(
             Response(
               status = StatusCode.Ok,
-              headers = Headers.empty,
-              body = Body.Text("Hello, World!")
+              headers = Headers.empty
+                .add(HeaderNames.ContentLength, "13")
+                .unsafeRunSync(),
+              body = Body.Text(body)
             )
           )
 
@@ -137,10 +140,14 @@ object BenchmarkServer {
           )
       }
 
+    // Read maxConnections from system property (for benchmark matrix testing)
+    val maxConnections = sys.props.get("eru.http.maxConnections").map(_.toInt).getOrElse(1024)
+
     val config = HttpServerConfig(
       host = "0.0.0.0",
       port = port,
-      backlog = 1024
+      backlog = 1024,
+      maxConnections = maxConnections
     )
 
     val program = for {
