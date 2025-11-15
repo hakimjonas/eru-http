@@ -1,12 +1,13 @@
 package net.ghoula.eru.http.server
 
+import jdk.net.ExtendedSocketOptions
+
 import java.net.InetSocketAddress
 import java.nio.channels.{ServerSocketChannel, SocketChannel}
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
 import scala.annotation.unused
 
-import jdk.net.ExtendedSocketOptions
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
 import net.ghoula.eru.prelude.*
@@ -59,7 +60,8 @@ private[server] final class NativeHttpServer(
   private def acceptLoop: Eru[HttpError, Unit] = {
     val acceptAndHandle = for {
       // Accept connection (blocks on Virtual Thread - efficient!)
-      clientSocket <- Eru.effect(serverSocket.accept())
+      clientSocket <- Eru
+        .effect(serverSocket.accept())
         .mapError(e => HttpError.NetworkError(s"Accept error: ${e.getMessage}", Some(e)))
 
       // Configure socket
@@ -77,10 +79,11 @@ private[server] final class NativeHttpServer(
         }
       }.mapError(e => HttpError.NetworkError(s"Socket config error: ${e.getMessage}", Some(e)))
 
-      // Fork handler fiber for each connection
+      // Fork handler fiber for each connection as daemon (no tracking)
       // Virtual Threads scale well, so we fork without artificial limiting
       // Each connection runs on its own VT (~10KB memory vs 2MB OS thread)
-      _ <- handleClient(clientSocket).fork
+      // Use forkDaemon to prevent rootFibers accumulation in long-running server
+      _ <- handleClient(clientSocket).forkDaemon
 
     } yield ()
 

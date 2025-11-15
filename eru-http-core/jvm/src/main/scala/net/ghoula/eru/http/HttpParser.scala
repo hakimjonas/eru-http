@@ -1,6 +1,5 @@
 package net.ghoula.eru.http
 
-import java.nio.ByteBuffer
 import java.nio.channels.SocketChannel
 
 import net.ghoula.eru.*
@@ -14,8 +13,30 @@ object HttpParser {
 
   private val SP = " "
   private val COLON = ":"
-  private val MAX_LINE_LENGTH = 8192
   private val MAX_HEADERS_SIZE = 64 * 1024 // 64KB
+
+  // Pre-parsed header names for zero-allocation header parsing
+  // These are the most common HTTP headers - we intern them once
+  private val commonHeaderNames = Set(
+    "content-length",
+    "content-type",
+    "connection",
+    "host",
+    "user-agent",
+    "accept",
+    "accept-encoding",
+    "transfer-encoding",
+    "date",
+    "server",
+    "cache-control",
+    "expires",
+    "last-modified",
+    "etag",
+    "location",
+    "set-cookie",
+    "cookie",
+    "authorization"
+  ).map(h => h.toLowerCase -> h.split("-").map(_.capitalize).mkString("-")).toMap
 
   /** Parse an HTTP request from a socket channel.
     *
@@ -24,12 +45,30 @@ object HttpParser {
     * @return
     *   An Eru effect containing the parsed request
     */
-  def parseRequest(socket: SocketChannel): Eru[HttpError, Request[Body]] = for {
-    requestLine <- readLine(socket)
-    (method, uri, version) <- parseRequestLine(requestLine)
-    headers <- readHeaders(socket)
-    body <- readBody(socket, headers)
-  } yield Request(method, uri, headers, body, version)
+  def parseRequest(socket: SocketChannel): Eru[HttpError, Request[Body]] = {
+    val reader = new BufferedSocketReader(socket)
+    parseRequest(reader)
+  }
+
+  /** Parse an HTTP request from a BufferedSocketReader.
+    *
+    * This overload allows reusing a BufferedSocketReader across multiple requests on the same
+    * connection (HTTP keep-alive), which is critical for performance as it avoids allocating a new
+    * 8KB direct ByteBuffer per request.
+    *
+    * @param reader
+    *   The buffered socket reader to read from
+    * @return
+    *   An Eru effect containing the parsed request
+    */
+  def parseRequest(reader: BufferedSocketReader): Eru[HttpError, Request[Body]] = {
+    for {
+      requestLine <- readLineBuffered(reader)
+      (method, uri, version) <- parseRequestLine(requestLine)
+      headers <- readHeadersBuffered(reader)
+      body <- readBodyBuffered(reader, headers)
+    } yield Request(method, uri, headers, body, version)
+  }
 
   /** Parse an HTTP response from a socket channel.
     *
@@ -38,12 +77,29 @@ object HttpParser {
     * @return
     *   An Eru effect containing the parsed response
     */
-  def parseResponse(socket: SocketChannel): Eru[HttpError, Response[Body]] = for {
-    statusLine <- readLine(socket)
-    (version, status, _) <- parseStatusLine(statusLine)
-    headers <- readHeaders(socket)
-    body <- readBody(socket, headers)
-  } yield Response(status, headers, body, version)
+  def parseResponse(socket: SocketChannel): Eru[HttpError, Response[Body]] = {
+    val reader = new BufferedSocketReader(socket)
+    parseResponseWithReader(reader)
+  }
+
+  /** Parse an HTTP response using an existing reader (for connection pooling).
+    *
+    * This allows reusing BufferedSocketReader across requests to avoid allocation overhead. The
+    * caller should reset() the reader before calling this method.
+    *
+    * @param reader
+    *   The buffered socket reader to use
+    * @return
+    *   An Eru effect containing the parsed response
+    */
+  def parseResponseWithReader(reader: BufferedSocketReader): Eru[HttpError, Response[Body]] = {
+    for {
+      statusLine <- readLineBuffered(reader)
+      (version, status, _) <- parseStatusLine(statusLine)
+      headers <- readHeadersBuffered(reader)
+      body <- readBodyBuffered(reader, headers)
+    } yield Response(status, headers, body, version)
+  }
 
   /** Parse HTTP request line: "GET /path HTTP/1.1"
     *
@@ -112,11 +168,23 @@ object HttpParser {
     }
   }
 
-  /** Read HTTP headers until empty line (\r\n\r\n)
+  /** Read a line using buffered reader (high performance version)
+    */
+  private def readLineBuffered(reader: BufferedSocketReader): Eru[HttpError, String] =
+    Eru.effect {
+      reader.readLine()
+    }.mapError {
+      case e: java.io.EOFException =>
+        HttpError.NetworkError(s"Connection closed: ${e.getMessage}", Some(e))
+      case e: Exception =>
+        HttpError.NetworkError(s"Error reading line: ${e.getMessage}", Some(e))
+    }
+
+  /** Read HTTP headers until empty line (\r\n\r\n) - buffered version
     *
     * RFC 9112 Section 5: header-field = field-name ":" OWS field-value OWS
     */
-  private def readHeaders(socket: SocketChannel): Eru[HttpError, Headers] = {
+  private def readHeadersBuffered(reader: BufferedSocketReader): Eru[HttpError, Headers] = {
     def loop(headers: Headers, bytesRead: Int): Eru[HttpError, Headers] = {
       if bytesRead > MAX_HEADERS_SIZE then {
         Eru.fail(
@@ -128,7 +196,7 @@ object HttpParser {
           )
         )
       } else {
-        readLine(socket).flatMap { line =>
+        readLineBuffered(reader).flatMap { line =>
           if line.isEmpty then {
             // Empty line marks end of headers
             Eru.succeed(headers)
@@ -148,6 +216,8 @@ object HttpParser {
   }
 
   /** Parse a single header line: "Content-Type: application/json"
+    *
+    * Uses pre-parsed header names for common headers to avoid allocations.
     */
   private def parseHeaderLine(line: String): Eru[HttpError, (String, String)] = {
     val colonIndex = line.indexOf(COLON)
@@ -161,24 +231,28 @@ object HttpParser {
         )
       )
     } else {
-      val name = line.substring(0, colonIndex).trim
+      val rawName = line.substring(0, colonIndex).trim
       val value = line.substring(colonIndex + 1).trim
+
+      // Use pre-parsed header name if it's a common one (zero allocation)
+      val name = commonHeaderNames.getOrElse(rawName.toLowerCase, rawName)
+
       Eru.succeed((name, value))
     }
   }
 
-  /** Read message body based on Content-Length or Transfer-Encoding
+  /** Read message body based on Content-Length or Transfer-Encoding - buffered version
     *
     * RFC 9112 Section 6: Message body determined by:
     *   1. Transfer-Encoding: chunked
     *   2. Content-Length header
     *   3. Connection close (for responses only)
     */
-  private def readBody(socket: SocketChannel, headers: Headers): Eru[HttpError, Body] = {
+  private def readBodyBuffered(reader: BufferedSocketReader, headers: Headers): Eru[HttpError, Body] = {
     // Check Transfer-Encoding first (takes precedence over Content-Length)
     headers.getFirst(HeaderNames.TransferEncoding) match {
       case Some(te) if te.value.toLowerCase.contains("chunked") =>
-        readChunkedBody(socket)
+        readChunkedBodyBuffered(reader)
 
       case _ =>
         // Check Content-Length
@@ -191,16 +265,14 @@ object HttpParser {
               } else if length > Int.MaxValue then {
                 throw new IllegalArgumentException(s"Content-Length too large: $length")
               } else {
-                readFixedLengthBody(socket, length.toInt)
+                val bytes = reader.readBytes(length.toInt)
+                Body.Binary(Bytes.fromArray(bytes), None)
               }
             }.mapError {
               case _: NumberFormatException =>
                 HttpError.InvalidRequest(InvalidRequest(s"Invalid Content-Length: ${cl.value}", "RFC 9110 Section 8.6"))
               case e: Exception =>
                 HttpError.NetworkError(s"Error reading body: ${e.getMessage}", Some(e))
-            }.flatMap {
-              case body: Body => Eru.succeed(body)
-              case bodyEru: Eru[HttpError, Body] => bodyEru
             }
 
           case None =>
@@ -210,53 +282,36 @@ object HttpParser {
     }
   }
 
-  /** Read fixed-length message body
+  /** Read message body based on Content-Length or Transfer-Encoding - legacy unbuffered version
+    *
+    * RFC 9112 Section 6: Message body determined by:
+    *   1. Transfer-Encoding: chunked
+    *   2. Content-Length header
+    *   3. Connection close (for responses only)
     */
-  private def readFixedLengthBody(socket: SocketChannel, length: Int): Eru[HttpError, Body] =
-    Eru.effect {
-      val buffer = ByteBuffer.allocate(length)
-      var totalRead = 0
 
-      while totalRead < length do {
-        val bytesRead = socket.read(buffer)
-        if bytesRead == -1 then {
-          throw new java.io.EOFException(s"Connection closed before reading $length bytes (read $totalRead)")
-        }
-        totalRead += bytesRead
-      }
-
-      buffer.flip()
-      val bytes = new Array[Byte](buffer.remaining())
-      buffer.get(bytes)
-      Body.Binary(Bytes.fromArray(bytes), None)
-    }.mapError { case e: Exception =>
-      HttpError.NetworkError(s"Error reading body: ${e.getMessage}", Some(e))
-    }
-
-  /** Read chunked message body (Transfer-Encoding: chunked)
+  /** Read chunked message body (Transfer-Encoding: chunked) - buffered version
     *
     * RFC 9112 Section 7.1: Chunked transfer coding Format: chunk-size CRLF chunk-data CRLF ... 0
     * CRLF CRLF
     */
-  private def readChunkedBody(socket: SocketChannel): Eru[HttpError, Body] = {
+  private def readChunkedBodyBuffered(reader: BufferedSocketReader): Eru[HttpError, Body] = {
     def readChunks(accumulator: Array[Byte]): Eru[HttpError, Body] = {
       for {
-        chunkSizeLine <- readLine(socket)
+        chunkSizeLine <- readLineBuffered(reader)
         chunkSize <- parseChunkSize(chunkSizeLine)
         result <-
           if chunkSize == 0 then {
             // Last chunk, read trailing headers (we ignore them for now)
-            readLine(socket).flatMap { _ =>
+            readLineBuffered(reader).flatMap { _ =>
               Eru.succeed(Body.Binary(Bytes.fromArray(accumulator), None))
             }
           } else {
             for {
-              chunkData <- readFixedLengthBody(socket, chunkSize)
-              _ <- readLine(socket) // Read trailing CRLF after chunk data
-              bytes = chunkData match {
-                case Body.Binary(b, _) => b.toArray
-                case _ => Array.empty[Byte]
+              bytes <- Eru.effect(reader.readBytes(chunkSize)).mapError { case e: Exception =>
+                HttpError.NetworkError(s"Error reading chunk: ${e.getMessage}", Some(e))
               }
+              _ <- readLineBuffered(reader) // Read trailing CRLF after chunk data
               result <- readChunks(accumulator ++ bytes)
             } yield result
           }
@@ -282,60 +337,4 @@ object HttpParser {
       )
     }
   }
-
-  /** Read a single line from socket (up to CRLF)
-    *
-    * This reads one byte at a time to find CRLF. Not the most efficient, but simple and correct for
-    * now. Can be optimized with buffering later.
-    */
-  private def readLine(socket: SocketChannel): Eru[HttpError, String] =
-    Eru.effect {
-      def loop(lineBuffer: StringBuilder, foundCR: Boolean, bytesRead: Int): String = {
-        if bytesRead >= MAX_LINE_LENGTH then {
-          throw new IllegalStateException(s"Line too long (max $MAX_LINE_LENGTH bytes)")
-        }
-
-        val byteBuffer = ByteBuffer.allocate(1)
-        byteBuffer.clear(): Unit
-        val n = socket.read(byteBuffer)
-
-        if n == -1 then {
-          throw new java.io.EOFException("Connection closed while reading line")
-        }
-
-        if n > 0 then {
-          byteBuffer.flip(): Unit
-          val byte = byteBuffer.get()
-          val char = byte.toChar
-
-          if foundCR && char == '\n' then {
-            // Found CRLF - return line without CRLF
-            lineBuffer.toString
-          } else if foundCR then {
-            // CR not followed by LF - add CR to buffer and continue
-            lineBuffer.append('\r')
-            if char == '\r' then {
-              loop(lineBuffer, true, bytesRead + 1)
-            } else {
-              lineBuffer.append(char)
-              loop(lineBuffer, false, bytesRead + 1)
-            }
-          } else if char == '\r' then {
-            loop(lineBuffer, true, bytesRead + 1)
-          } else {
-            lineBuffer.append(char)
-            loop(lineBuffer, false, bytesRead + 1)
-          }
-        } else {
-          loop(lineBuffer, foundCR, bytesRead)
-        }
-      }
-
-      loop(new StringBuilder, false, 0)
-    }.mapError {
-      case e: java.io.EOFException =>
-        HttpError.NetworkError(s"Connection closed: ${e.getMessage}", Some(e))
-      case e: Exception =>
-        HttpError.NetworkError(s"Error reading line: ${e.getMessage}", Some(e))
-    }
 }

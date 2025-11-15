@@ -1,10 +1,11 @@
 package examples
 
 import scala.concurrent.duration.*
+
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
 import net.ghoula.eru.http.client.*
-import net.ghoula.eru.prelude.{given, *}
+import net.ghoula.eru.prelude.*
 
 /** Benchmark for HTTP client connection pooling.
   *
@@ -47,30 +48,65 @@ object ConnectionPoolBenchmark {
     runConcurrentBenchmark(serverUrl, concurrency = 200)
     println()
 
+    runConcurrentBenchmark(serverUrl, concurrency = 1000)
+    println()
+
+    // EXTREME TEST: 1 million requests (sequential within fibers)
+    runConcurrentBenchmark(serverUrl, concurrency = 1000, requestsPerFiber = 1000)
+    println()
+
+    // TRULY CONCURRENT TESTS: All requests fire at once
+    println("=== TRULY CONCURRENT TESTS (Maximum Pool Contention) ===")
+    println()
+    runTrulyConcurrentBenchmark(serverUrl, totalRequests = 100)
+    println()
+    runTrulyConcurrentBenchmark(serverUrl, totalRequests = 1000)
+    println()
+    runTrulyConcurrentBenchmark(serverUrl, totalRequests = 10000)
+    println()
+
+    // CONSISTENCY TEST: Run the critical test 5 times to check variance
+    println("=== CONSISTENCY TEST (5 iterations of 1M requests) ===")
+    println()
+    (1 to 5).foreach { iteration =>
+      print(s"Iteration $iteration/5... ")
+      runConcurrentBenchmark(serverUrl, concurrency = 1000, requestsPerFiber = 1000)
+      println()
+    }
+
     println("Benchmark complete!")
   }
 
   def warmup(serverUrl: String): Unit = {
-    println("Warming up...")
+    println("Warming up JIT compiler...")
 
     val config = HttpClientConfig(
       connectTimeout = 5.seconds,
       requestTimeout = 5.seconds,
-      maxConnections = 100,
-      maxConnectionsPerHost = 10
+      maxConnections = 200,
+      maxConnectionsPerHost = 100
     )
 
     val program = for {
       client <- HttpClient.create(config)
       uri <- Uri.parse(s"$serverUrl/")
-      _ <- Eru.foreach((1 to 100).toList) { _ =>
-        client.send(Request.get(uri))
+      // Run 5 warmup iterations with different concurrency levels
+      _ <- Eru.foreach(List(10, 50, 100, 200, 1000)) { concurrency =>
+        for {
+          _ <- Eru.effect(print(s"  Warmup iteration (concurrency=$concurrency)... "))
+          start <- Eru.effect(System.nanoTime())
+          _ <- parTraverse((1 to 1000).toList) { _ =>
+            client.send(Request.get(uri)).map(_ => ())
+          }
+          end <- Eru.effect(System.nanoTime())
+          _ <- Eru.effect(println(s"${(end - start) / 1_000_000}ms"))
+        } yield ()
       }
       _ <- client.shutdown
     } yield ()
 
     program.unsafeRunSync()
-    println("Warmup complete")
+    println("Warmup complete (JIT should be fully optimized now)")
   }
 
   def runSequentialBenchmark(serverUrl: String): Unit = {
@@ -80,7 +116,7 @@ object ConnectionPoolBenchmark {
       connectTimeout = 5.seconds,
       requestTimeout = 5.seconds,
       maxConnections = 10,
-      maxConnectionsPerHost = 1  // Force reuse
+      maxConnectionsPerHost = 1 // Force reuse
     )
 
     val requests = 1000
@@ -90,7 +126,7 @@ object ConnectionPoolBenchmark {
       uri <- Uri.parse(s"$serverUrl/")
 
       start = System.nanoTime()
-      _ <- Eru.foreach((1 to requests).toList) { _ =>
+      _ <- Eru.foreachDiscard((1 to requests).toList) { _ =>
         client.send(Request.get(uri))
       }
       end = System.nanoTime()
@@ -110,18 +146,16 @@ object ConnectionPoolBenchmark {
     program.unsafeRunSync()
   }
 
-  def runConcurrentBenchmark(serverUrl: String, concurrency: Int): Unit = {
-    println(s"=== Concurrent Requests (concurrency=$concurrency) ===")
+  def runConcurrentBenchmark(serverUrl: String, concurrency: Int, requestsPerFiber: Int = 100): Unit = {
+    val totalRequests = concurrency * requestsPerFiber
+    println(s"=== Concurrent Requests (concurrency=$concurrency, total=$totalRequests) ===")
 
     val config = HttpClientConfig(
       connectTimeout = 5.seconds,
       requestTimeout = 5.seconds,
-      maxConnections = concurrency,
-      maxConnectionsPerHost = 10
+      maxConnections = concurrency * 2,
+      maxConnectionsPerHost = concurrency // Scale with concurrency
     )
-
-    val requestsPerFiber = 100
-    val totalRequests = concurrency * requestsPerFiber
 
     val program = for {
       client <- HttpClient.create(config)
@@ -131,9 +165,11 @@ object ConnectionPoolBenchmark {
 
       // Launch concurrent fibers, each making multiple requests
       fibers = (1 to concurrency).map { _ =>
-        Eru.foreach((1 to requestsPerFiber).toList) { _ =>
-          client.send(Request.get(uri))
-        }.fork
+        Eru
+          .foreachDiscard((1 to requestsPerFiber).toList) { _ =>
+            client.send(Request.get(uri))
+          }
+          .fork
       }.toList
 
       fiberHandles <- parSequence(fibers)
@@ -154,6 +190,50 @@ object ConnectionPoolBenchmark {
       println(s"Throughput: ${reqPerSec.toInt} req/s")
       println(s"Avg Latency: ${avgLatencyMs}ms")
       println(s"Ref contention test: ${concurrency} fibers all using same pool")
+    }
+
+    program.attempt.unsafeRunSync() match {
+      case Result.Success(_) => ()
+      case Result.Failure(e) =>
+        println(s"ERROR: $e")
+    }
+  }
+
+  def runTrulyConcurrentBenchmark(serverUrl: String, totalRequests: Int): Unit = {
+    println(s"=== Truly Concurrent: $totalRequests requests ALL fire simultaneously ===")
+
+    val config = HttpClientConfig(
+      connectTimeout = 5.seconds,
+      requestTimeout = 5.seconds,
+      maxConnections = 200,
+      maxConnectionsPerHost = 100
+    )
+
+    val program = for {
+      client <- HttpClient.create(config)
+      uri <- Uri.parse(s"$serverUrl/")
+
+      start = System.nanoTime()
+
+      // Fire ALL requests at once using parTraverse
+      _ <- parTraverse((1 to totalRequests).toList) { _ =>
+        client.send(Request.get(uri))
+      }
+
+      end = System.nanoTime()
+
+      durationMs = (end - start) / 1_000_000.0
+      _ <- client.shutdown
+    } yield {
+      val reqPerSec = totalRequests / (durationMs / 1000.0)
+      val avgLatencyMs = durationMs / totalRequests
+
+      println(s"Total requests: $totalRequests (all truly concurrent)")
+      println(s"Duration: ${durationMs}ms")
+      println(s"Throughput: ${reqPerSec.toInt} req/s")
+      println(s"Avg Latency: ${avgLatencyMs}ms")
+      println("Pool config: maxConnections=200, maxConnectionsPerHost=100")
+      println(s"Contention: ${totalRequests} requests competing for pool simultaneously")
     }
 
     program.attempt.unsafeRunSync() match {

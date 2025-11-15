@@ -12,6 +12,9 @@ import net.ghoula.eru.http.{ContentEncoding, TlsConfig}
   *   The port to listen on (0 for random available port)
   * @param backlog
   *   Maximum queue length for incoming connections
+  * @param maxConnections
+  *   Maximum number of concurrent connections to handle. Additional connections will wait in
+  *   backlog. Default 1024. Helps prevent resource exhaustion under extreme load.
   * @param idleTimeout
   *   Maximum time a connection can be idle before being closed
   * @param maxRequestSize
@@ -36,6 +39,7 @@ final case class HttpServerConfig(
   host: String = "0.0.0.0",
   port: Int = 8080,
   backlog: Int = 128,
+  maxConnections: Int = 1024,
   idleTimeout: Duration = 60.seconds,
   maxRequestSize: Int = 10 * 1024 * 1024, // 10 MB
   enableHttp2: Boolean = false,

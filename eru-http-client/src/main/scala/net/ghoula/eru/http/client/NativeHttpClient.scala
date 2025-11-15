@@ -65,9 +65,12 @@ private[client] final class NativeHttpClient(
       // Add Host header if missing (required for HTTP/1.1)
       requestWithHost <- addHostHeaderIfNeeded(request)
 
-      _ <- requestWithHost.validate.mapError(HttpError.InvalidRequest.apply)
-      encodedBody <- encoder.encode(requestWithHost.body).mapError(HttpError.BodyEncodeError.apply)
-      encodedRequest = requestWithHost.copy(body = encodedBody)
+      // Add Connection: keep-alive for connection pooling (if not already set)
+      requestWithConnection <- addConnectionHeaderIfNeeded(requestWithHost)
+
+      _ <- requestWithConnection.validate.mapError(HttpError.InvalidRequest.apply)
+      encodedBody <- encoder.encode(requestWithConnection.body).mapError(HttpError.BodyEncodeError.apply)
+      encodedRequest = requestWithConnection.copy(body = encodedBody)
 
       // Apply request interceptors
       interceptedRequest <- requestInterceptors.foldLeft(Eru.succeed(encodedRequest)) { (req, interceptor) =>
@@ -227,9 +230,12 @@ private[client] final class NativeHttpClient(
           Eru.succeed(requestWithCookies)
         }
 
-      // Write request with timeout
+      // Get buffer for this connection (managed separately for type safety)
+      buffer <- pool.getBuffer(conn)
+
+      // Write request with timeout using connection's buffer
       _ <- HttpWriter
-        .writeRequest(secureSocket, requestWithContentLength)
+        .writeRequestWithBuffer(secureSocket, requestWithContentLength, buffer)
         .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
         .mapError {
           case _: TimeoutException => HttpError.TimeoutError(s"Write timeout after ${config.requestTimeout}")
@@ -237,9 +243,12 @@ private[client] final class NativeHttpClient(
           case e: Throwable => HttpError.NetworkError(s"Write error: ${e.getMessage}", Some(e))
         }
 
-      // Read response with timeout
+      // Get reader for this connection (pooled for zero-allocation response parsing)
+      reader <- pool.getReader(conn)
+
+      // Read response with timeout using pooled reader
       response <- HttpParser
-        .parseResponse(secureSocket)
+        .parseResponseWithReader(reader)
         .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
         .mapError {
           case _: TimeoutException => HttpError.TimeoutError(s"Read timeout after ${config.requestTimeout}")
@@ -322,6 +331,19 @@ private[client] final class NativeHttpClient(
           .add(HeaderNames.Host, hostValue)
           .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Host header: $e", "RFC 9110")))
       } yield request.copy(headers = newHeaders)
+    }
+  }
+
+  /** Add Connection: keep-alive header if not already present (for connection pooling)
+    */
+  private def addConnectionHeaderIfNeeded[A](request: Request[A]): Eru[HttpError, Request[A]] = {
+    if request.headers.contains(HeaderNames.Connection) then {
+      Eru.succeed(request)
+    } else {
+      request.headers
+        .add(HeaderNames.Connection, "keep-alive")
+        .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Connection header: $e", "RFC 9110")))
+        .map(newHeaders => request.copy(headers = newHeaders))
     }
   }
 

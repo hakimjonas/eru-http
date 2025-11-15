@@ -40,15 +40,45 @@ ThisBuild / scalacOptions ++= Seq(
 // Java options
 ThisBuild / javacOptions ++= Seq(
   "-source",
-  "21",
+  "25",
   "-target",
-  "21"
+  "25"
 )
 
 // Test settings
 ThisBuild / Test / testOptions += Tests.Argument(TestFrameworks.MUnit, "+l")
 ThisBuild / Test / parallelExecution := false
 ThisBuild / Test / fork := true // Enable fork to use javaOptions
+
+// JVM options for running servers (can be configured via environment variables for benchmarking)
+// Applies to all projects and all forked JVM tasks (run, Test / run, Test / runMain, test)
+val jvmRunOptions = {
+  // Read GC type from environment or system property (default: ZGC, which is generational by default in JDK 24+)
+  val gcType = sys.env.getOrElse("GC_TYPE", sys.props.getOrElse("gc.type", "zgc"))
+  val heapSize = sys.env.getOrElse("HEAP_SIZE", sys.props.getOrElse("heap.size", "2g"))
+
+  val gcOptions = gcType.toLowerCase match {
+    case "parallel" | "parallelgc" =>
+      Seq("-XX:+UseParallelGC", "-XX:+UseNUMA", "-server")
+    case "g1" | "g1gc" =>
+      Seq("-XX:+UseG1GC", "-server")
+    case "zgc" | "zgc-gen" | "zgcgen" =>
+      // ZGC is generational by default in JDK 24+, no need for -XX:+ZGenerational
+      Seq("-XX:+UseZGC", "-server")
+    case _ =>
+      // Default to ZGC (generational by default in JDK 24+)
+      Seq("-XX:+UseZGC", "-server")
+  }
+
+  gcOptions ++ Seq(
+    s"-Xms$heapSize", // Initial heap size
+    s"-Xmx$heapSize", // Max heap size
+    "-XX:MaxDirectMemorySize=4g" // Direct memory for NIO buffers (8KB per connection)
+  )
+}
+
+ThisBuild / run / javaOptions ++= jvmRunOptions
+ThisBuild / Test / javaOptions ++= jvmRunOptions
 
 // Publishing settings
 ThisBuild / publishTo := {
@@ -94,7 +124,7 @@ lazy val commonSettings = Seq(
 )
 
 // Eru dependency version (for CI)
-val eruVersion = "0.0.0+336-30cc42da"
+val eruVersion = "0.0.0+348-cdca2cd4"
 
 // Check if we're in CI (GITHUB_TOKEN is set) or local development
 val useLocalEru = !sys.env.contains("GITHUB_TOKEN") || sys.env("GITHUB_TOKEN").isEmpty
@@ -105,7 +135,7 @@ lazy val root = (project in file("."))
     name := "eru-http",
     publish / skip := true
   )
-  .aggregate(coreJVM, client, server) // Skip coreJS until Eru has JS support
+  .aggregate(coreJVM, client, server, examples, benchmarks) // Skip coreJS until Eru has JS support
 
 // Local Eru project references (only when not in CI)
 lazy val eruCoreRef = if (useLocalEru) Some(ProjectRef(file("../eru"), "eruCoreJVM")) else None
@@ -165,6 +195,32 @@ lazy val server = (project in file("eru-http-server"))
     description := "Standards-compliant HTTP server built on Eru"
   )
   .dependsOn(coreJVM)
+
+// Examples and Benchmarks
+lazy val examples = (project in file("examples"))
+  .settings(commonSettings)
+  .settings(
+    name := "eru-http-examples",
+    description := "Examples and benchmarks for eru-http",
+    publish / skip := true
+  )
+  .dependsOn(coreJVM, client, server)
+
+// Standalone benchmarks with fat JAR assembly
+lazy val benchmarks = (project in file("benchmarks"))
+  .settings(commonSettings)
+  .settings(
+    name := "eru-http-benchmarks",
+    description := "Standalone benchmark server for eru-http",
+    publish / skip := true,
+    assembly / assemblyJarName := "eru-http-benchmark-server.jar",
+    assembly / mainClass := Some("benchmarks.HttpBenchmarkServer"),
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", xs @ _*) => MergeStrategy.discard
+      case x => MergeStrategy.first
+    }
+  )
+  .dependsOn(coreJVM, server)
 
 // Benchmarks - commented out until needed
 // lazy val bench = (project in file("eru-http-bench"))

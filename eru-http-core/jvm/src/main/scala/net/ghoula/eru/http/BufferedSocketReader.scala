@@ -1,8 +1,9 @@
 package net.ghoula.eru.http
 
+import jdk.net.ExtendedSocketOptions
+
 import java.nio.ByteBuffer
 import java.nio.channels.SocketChannel
-import jdk.net.ExtendedSocketOptions
 
 /** Buffered reader for socket channels.
   *
@@ -11,9 +12,12 @@ import jdk.net.ExtendedSocketOptions
   *
   * Can be reused across multiple requests on the same connection by calling reset().
   *
-  * @param socket Socket channel to read from
-  * @param bufferSize Size of internal read buffer (default 8KB)
-  * @param maxLineLength Maximum line length to prevent memory exhaustion (default 8KB)
+  * @param socket
+  *   Socket channel to read from
+  * @param bufferSize
+  *   Size of internal read buffer (default 8KB)
+  * @param maxLineLength
+  *   Maximum line length to prevent memory exhaustion (default 8KB)
   */
 private[http] final class BufferedSocketReader(
   socket: SocketChannel,

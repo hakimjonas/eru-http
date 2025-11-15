@@ -126,8 +126,8 @@ object HttpWriter {
 
   /** Write an HTTP response to a socket channel using a reusable ByteBuffer.
     *
-    * This zero-allocation version writes headers directly to the provided buffer,
-    * avoiding string concatenation and getBytes() calls. Critical for high-throughput servers.
+    * This zero-allocation version writes headers directly to the provided buffer, avoiding string
+    * concatenation and getBytes() calls. Critical for high-throughput servers.
     *
     * @param socket
     *   The socket channel to write to (must be in blocking mode)
