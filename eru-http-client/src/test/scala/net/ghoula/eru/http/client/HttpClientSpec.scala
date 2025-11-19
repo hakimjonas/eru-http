@@ -466,4 +466,143 @@ class HttpClientSpec extends FunSuite {
       server.shutdown()
     }
   }
+
+  // ===== Automatic Decompression Tests =====
+
+  test("HttpClient - automatically decompresses gzip responses") {
+    // Create server that returns compressed response
+    val server = TestHttpServer.create(handler = (_, _) => {
+      val largeText = "x" * 10240
+      val compressed = Compression.compress(Bytes.fromString(largeText, Charset.UTF8), ContentEncoding.Gzip).unsafeRunSync()
+      TestHttpServer.ResponseConfig(
+        status = StatusCode.Ok,
+        binaryBody = Some(compressed), // Send as binary
+        headers = Map(
+          "Content-Encoding" -> "gzip",
+          "Content-Length" -> compressed.length.toString
+        )
+      )
+    })
+
+    try {
+      HttpClient
+        .scoped(HttpClientConfig.default) { client => // automaticDecompression = true by default
+          for {
+            uri <- parseUri(server.url())
+            request <- createRequest("get", uri)
+            response <- client.send(request)
+          } yield {
+            // Response should be automatically decompressed
+            assertEquals(response.body.length, 10240)
+            assertEquals(response.body.asString(Charset.UTF8), "x" * 10240)
+            // Content-Encoding header should be removed
+            assert(response.headers.getFirst(HeaderNames.ContentEncoding).isEmpty)
+          }
+        }
+        .assertSuccess
+    } finally {
+      server.shutdown()
+    }
+  }
+
+  test("HttpClient - skips decompression when automaticDecompression is false") {
+    val server = TestHttpServer.create(handler = (_, _) => {
+      val largeText = "x" * 10240
+      val compressed = Compression.compress(Bytes.fromString(largeText, Charset.UTF8), ContentEncoding.Gzip).unsafeRunSync()
+      TestHttpServer.ResponseConfig(
+        status = StatusCode.Ok,
+        binaryBody = Some(compressed), // Send as binary
+        headers = Map(
+          "Content-Encoding" -> "gzip",
+          "Content-Length" -> compressed.length.toString
+        )
+      )
+    })
+
+    try {
+      HttpClient
+        .scoped(HttpClientConfig.default.withAutomaticDecompression(false)) { client =>
+          for {
+            uri <- parseUri(server.url())
+            request <- createRequest("get", uri)
+            response <- client.send(request)
+          } yield {
+            // Response should stay compressed
+            assert(response.body.length < 1000) // Compressed size ~45 bytes
+            // Content-Encoding header should remain
+            assert(response.headers.getFirst(HeaderNames.ContentEncoding).isDefined)
+            assertEquals(response.headers.getFirst(HeaderNames.ContentEncoding).get.value, "gzip")
+          }
+        }
+        .assertSuccess
+    } finally {
+      server.shutdown()
+    }
+  }
+
+  test("HttpClient - handles responses without Content-Encoding") {
+    val server = TestHttpServer.simple(body = "Plain text response")
+
+    try {
+      HttpClient
+        .scoped(HttpClientConfig.default) { client =>
+          for {
+            uri <- parseUri(server.url())
+            request <- createRequest("get", uri)
+            response <- client.send(request)
+          } yield {
+            assertEquals(response.body.asString(Charset.UTF8), "Plain text response")
+            assert(response.headers.getFirst(HeaderNames.ContentEncoding).isEmpty)
+          }
+        }
+        .assertSuccess
+    } finally {
+      server.shutdown()
+    }
+  }
+
+  test("HttpClient - adds Accept-Encoding header when automaticDecompression is enabled") {
+    val server = TestHttpServer.echoWithHeaders()
+
+    try {
+      HttpClient
+        .scoped(HttpClientConfig.default) { client => // automaticDecompression = true
+          for {
+            uri <- parseUri(server.url())
+            request <- createRequest("get", uri)
+            response <- client.send(request)
+          } yield {
+            val body = response.body.asString(Charset.UTF8)
+            // Response should contain the Accept-Encoding header we sent
+            assert(body.contains("accept-encoding") || body.contains("Accept-Encoding"))
+            assert(body.contains("gzip") && body.contains("deflate"))
+          }
+        }
+        .assertSuccess
+    } finally {
+      server.shutdown()
+    }
+  }
+
+  test("HttpClient - does not add Accept-Encoding when automaticDecompression is disabled") {
+    val server = TestHttpServer.echoWithHeaders()
+
+    try {
+      HttpClient
+        .scoped(HttpClientConfig.default.withAutomaticDecompression(false)) { client =>
+          for {
+            uri <- parseUri(server.url())
+            request <- createRequest("get", uri)
+            response <- client.send(request)
+          } yield {
+            val body = response.body.asString(Charset.UTF8)
+            // Should not automatically add Accept-Encoding
+            assert(!body.toLowerCase.contains("accept-encoding"))
+          }
+        }
+        .assertSuccess
+    } finally {
+      server.shutdown()
+    }
+  }
 }

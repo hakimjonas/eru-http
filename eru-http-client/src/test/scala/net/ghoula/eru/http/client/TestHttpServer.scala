@@ -37,7 +37,8 @@ object TestHttpServer {
     body: String = "",
     headers: Map[String, String] = Map.empty,
     delay: Duration = Duration.Zero,
-    redirectTo: Option[String] = None
+    redirectTo: Option[String] = None,
+    binaryBody: Option[Bytes] = None  // For binary responses like compressed data
   )
 
   private val requestCounter = new AtomicInteger(0)
@@ -85,10 +86,16 @@ object TestHttpServer {
               responseHeaders = responseHeaders.add(name, value).unsafeRunSync()
             }
 
+            // Use binary body if provided, otherwise text body
+            val responseBody = config.binaryBody match {
+              case Some(bytes) => Body.Binary(bytes)
+              case None => Body.Text(config.body)
+            }
+
             Response(
               status = config.status,
               headers = responseHeaders,
-              body = Body.Text(config.body)
+              body = responseBody
             )
         }
       }.mapError(e => HttpError.NetworkError(s"Test handler error: ${e.getMessage}", Some(e)))
