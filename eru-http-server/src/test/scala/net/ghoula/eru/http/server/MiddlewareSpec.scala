@@ -617,4 +617,138 @@ class MiddlewareSpec extends FunSuite {
     val config = CORSConfig.forOrigins("https://example.com", "https://app.example.com")
     assertEquals(config.allowedOrigins, List("https://example.com", "https://app.example.com"))
   }
+
+  // ===== Compression Middleware Tests =====
+
+  test("Middleware - compression compresses large responses with Accept-Encoding") {
+    val largeText = "x" * 10240 // 10KB
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text(largeText)))
+
+    val app = Middleware.compression().apply(handler)
+
+    val request = Request
+      .get(uri("http://localhost/"))
+      .setHeader(HeaderNames.AcceptEncoding, "gzip")
+      .assertSuccess
+
+    val response = app(request).assertSuccess
+
+    assertEquals(response.status, StatusCode.Ok)
+    assert(response.headers.getFirst(HeaderNames.ContentEncoding).isDefined)
+    assertEquals(response.headers.getFirst(HeaderNames.ContentEncoding).get.value, "gzip")
+
+    // Verify body is compressed (should be much smaller than 10KB)
+    response.body match {
+      case Body.Binary(bytes, _) => assert(bytes.length < 1000) // Should be ~45 bytes for "x" * 10240
+      case other => fail(s"Expected Body.Binary but got: $other")
+    }
+  }
+
+  test("Middleware - compression skips small responses") {
+    val smallText = "Hello" // 5 bytes
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text(smallText)))
+
+    val app = Middleware.compression(CompressionConfig(minSize = 1024)).apply(handler)
+
+    val request = Request
+      .get(uri("http://localhost/"))
+      .setHeader(HeaderNames.AcceptEncoding, "gzip")
+      .assertSuccess
+
+    val response = app(request).assertSuccess
+
+    assertEquals(response.status, StatusCode.Ok)
+    // Should not be compressed (below minimum size)
+    assert(response.headers.getFirst(HeaderNames.ContentEncoding).isEmpty)
+    response.body match {
+      case Body.Text(value, _, _) => assertEquals(value, "Hello")
+      case other => fail(s"Expected Body.Text but got: $other")
+    }
+  }
+
+  test("Middleware - compression skips responses without Accept-Encoding") {
+    val largeText = "x" * 10240
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text(largeText)))
+
+    val app = Middleware.compression().apply(handler)
+
+    val request = Request.get(uri("http://localhost/"))
+    val response = app(request).assertSuccess
+
+    assertEquals(response.status, StatusCode.Ok)
+    // Should not be compressed (no Accept-Encoding header)
+    assert(response.headers.getFirst(HeaderNames.ContentEncoding).isEmpty)
+    response.body match {
+      case Body.Text(value, _, _) => assertEquals(value, largeText)
+      case other => fail(s"Expected Body.Text but got: $other")
+    }
+  }
+
+  test("Middleware - compression respects encoding preferences") {
+    val largeText = "x" * 10240
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.text(largeText)))
+
+    val app = Middleware
+      .compression(CompressionConfig(preferredEncodings = List(ContentEncoding.Brotli)))
+      .apply(handler)
+
+    val request = Request
+      .get(uri("http://localhost/"))
+      .setHeader(HeaderNames.AcceptEncoding, "gzip, deflate, br")
+      .assertSuccess
+
+    val response = app(request).assertSuccess
+
+    // Should prefer brotli
+    assert(response.headers.getFirst(HeaderNames.ContentEncoding).isDefined)
+    assertEquals(response.headers.getFirst(HeaderNames.ContentEncoding).get.value, "br")
+  }
+
+  test("Middleware - compression skips already encoded responses") {
+    val handler: RequestHandler = _ =>
+      Eru.succeed(
+        Response(
+          status = StatusCode.Ok,
+          headers = Headers.empty.add(HeaderNames.ContentEncoding, "gzip").assertSuccess,
+          body = Body.text("already compressed")
+        )
+      )
+
+    val app = Middleware.compression().apply(handler)
+
+    val request = Request
+      .get(uri("http://localhost/"))
+      .setHeader(HeaderNames.AcceptEncoding, "gzip")
+      .assertSuccess
+
+    val response = app(request).assertSuccess
+
+    // Should not double-compress
+    assertEquals(response.headers.getFirst(HeaderNames.ContentEncoding).get.value, "gzip")
+    response.body match {
+      case Body.Text(value, _, _) => assertEquals(value, "already compressed")
+      case other => fail(s"Expected Body.Text but got: $other")
+    }
+  }
+
+  test("Middleware - compression handles Binary bodies") {
+    val largeData = Bytes.fromArray(Array.fill(10240)('x'.toByte))
+    val handler: RequestHandler = _ => Eru.succeed(Response(StatusCode.Ok, Headers.empty, Body.Binary(largeData)))
+
+    val app = Middleware.compression().apply(handler)
+
+    val request = Request
+      .get(uri("http://localhost/"))
+      .setHeader(HeaderNames.AcceptEncoding, "gzip")
+      .assertSuccess
+
+    val response = app(request).assertSuccess
+
+    assert(response.headers.getFirst(HeaderNames.ContentEncoding).isDefined)
+    assertEquals(response.headers.getFirst(HeaderNames.ContentEncoding).get.value, "gzip")
+    response.body match {
+      case Body.Binary(bytes, _) => assert(bytes.length < 1000) // Should be compressed
+      case other => fail(s"Expected Body.Binary but got: $other")
+    }
+  }
 }
