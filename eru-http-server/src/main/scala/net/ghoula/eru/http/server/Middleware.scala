@@ -340,6 +340,129 @@ object Middleware {
     */
   inline def combine(middlewares: Middleware*): Middleware =
     middlewares.reduceLeftOption(_ andThen _).getOrElse(identity)
+
+  /** Response compression middleware.
+    *
+    * Compresses response bodies based on Accept-Encoding request header.
+    * Supports gzip, deflate, and brotli compression.
+    *
+    * @param config
+    *   Compression configuration
+    * @example
+    *   {{{
+    *   val app = Middleware.compression(CompressionConfig.default).apply(handler)
+    *   }}}
+    */
+  def compression(config: CompressionConfig = CompressionConfig.default): Middleware = handler =>
+    req => {
+      handler(req).flatMap { resp =>
+        // Skip compression if response is already encoded
+        if resp.headers.contains(HeaderNames.ContentEncoding) then {
+          Eru.succeed(resp)
+        } else {
+          // Get Accept-Encoding from request
+          val acceptedEncodings = req.headers
+            .getFirst(HeaderNames.AcceptEncoding)
+            .map(_.value.split(',').map(_.trim.toLowerCase).toList)
+            .getOrElse(List.empty)
+
+          // Skip compression for small responses (below threshold)
+          val shouldCompress = resp.body.contentLength match {
+            case Some(len) => len >= config.minSize
+            case None => true // Compress streaming responses
+          }
+
+          if !shouldCompress then {
+            Eru.succeed(resp)
+          } else {
+            // Choose encoding based on client preferences and availability
+            val encoding = chooseEncoding(acceptedEncodings, config.preferredEncodings)
+
+            encoding match {
+              case Some(enc) if enc != ContentEncoding.Identity =>
+                compressResponse(resp, enc).mapError(e =>
+                  HttpError.NetworkError(s"Compression failed: ${e.getMessage}", Some(e))
+                )
+              case _ =>
+                Eru.succeed(resp)
+            }
+          }
+        }
+      }
+    }
+
+  /** Compression middleware with default configuration. */
+  inline def compressionDefault: Middleware =
+    compression(CompressionConfig.default)
+
+  private def chooseEncoding(
+    accepted: List[String],
+    preferred: List[ContentEncoding]
+  ): Option[ContentEncoding] = {
+    // Find first preferred encoding that is accepted by client
+    preferred.find(enc => accepted.contains(enc.value.toLowerCase) || accepted.contains("*"))
+  }
+
+  private def compressResponse(
+    resp: Response[Body],
+    encoding: ContentEncoding
+  ): Eru[Compression.CompressionError, Response[Body]] = {
+    resp.body match {
+      case Body.Empty => Eru.succeed(resp)
+
+      case Body.Text(text, mediaType, charset) =>
+        val bytes = Bytes.fromString(text, charset)
+        Compression.compress(bytes, encoding).flatMap { compressed =>
+          resp
+            .setHeader(HeaderNames.ContentEncoding, encoding.value)
+            .flatMap(_.setHeader(HeaderNames.ContentLength, compressed.length.toString))
+            .map(_.copy(body = Body.Binary(compressed, mediaType)))
+            .mapError {
+              case e: HeaderName.InvalidHeaderName =>
+                Compression.CompressionError(e.getMessage, Some("Invalid header name"))
+              case e: HeaderValue.InvalidHeaderValue =>
+                Compression.CompressionError(e.getMessage, Some("Invalid header value"))
+            }
+        }
+
+      case Body.Binary(bytes, mediaType) =>
+        Compression.compress(bytes, encoding).flatMap { compressed =>
+          resp
+            .setHeader(HeaderNames.ContentEncoding, encoding.value)
+            .flatMap(_.setHeader(HeaderNames.ContentLength, compressed.length.toString))
+            .map(_.copy(body = Body.Binary(compressed, mediaType)))
+            .mapError {
+              case e: HeaderName.InvalidHeaderName =>
+                Compression.CompressionError(e.getMessage, Some("Invalid header name"))
+              case e: HeaderValue.InvalidHeaderValue =>
+                Compression.CompressionError(e.getMessage, Some("Invalid header value"))
+            }
+        }
+
+      case Body.Stream(chunks, contentLength, mediaType) =>
+        // For streaming: compress the stream and use chunked encoding
+        chunks.flatMap { stream =>
+          Compression.compressStream(stream, encoding).flatMap { compressedStream =>
+            resp
+              .setHeader(HeaderNames.ContentEncoding, encoding.value)
+              .flatMap { r =>
+                // Remove Content-Length since compression changes size
+                val headersWithoutLength = r.headers.remove(HeaderNames.ContentLength)
+                Eru.succeed(r.copy(
+                  headers = headersWithoutLength,
+                  body = Body.Stream(Eru.succeed(compressedStream), None, mediaType)
+                ))
+              }
+              .mapError {
+                case e: HeaderName.InvalidHeaderName =>
+                  Compression.CompressionError(e.getMessage, Some("Invalid header name"))
+                case e: HeaderValue.InvalidHeaderValue =>
+                  Compression.CompressionError(e.getMessage, Some("Invalid header value"))
+              }
+          }
+        }.mapError(e => Compression.CompressionError(e.toString, None))
+    }
+  }
 }
 
 /** CORS configuration. */
@@ -375,4 +498,34 @@ object CORSConfig {
   /** CORS configuration for specific origins. */
   def forOrigins(origins: String*): CORSConfig =
     default.copy(allowedOrigins = origins.toList)
+}
+
+/** Compression middleware configuration. */
+final case class CompressionConfig(
+  /** Minimum response size (in bytes) to compress. Responses smaller than this are not compressed. */
+  minSize: Long = 1024,
+  /** Preferred compression encodings in order of preference. */
+  preferredEncodings: List[ContentEncoding] = List(
+    ContentEncoding.Brotli,
+    ContentEncoding.Gzip,
+    ContentEncoding.Deflate
+  )
+)
+
+object CompressionConfig {
+
+  /** Default compression configuration. */
+  val default: CompressionConfig = CompressionConfig()
+
+  /** Aggressive compression (compress everything, prefer brotli). */
+  val aggressive: CompressionConfig = CompressionConfig(
+    minSize = 0,
+    preferredEncodings = List(ContentEncoding.Brotli, ContentEncoding.Gzip, ContentEncoding.Deflate)
+  )
+
+  /** Conservative compression (only large responses, prefer gzip for compatibility). */
+  val conservative: CompressionConfig = CompressionConfig(
+    minSize = 4096,
+    preferredEncodings = List(ContentEncoding.Gzip, ContentEncoding.Deflate)
+  )
 }

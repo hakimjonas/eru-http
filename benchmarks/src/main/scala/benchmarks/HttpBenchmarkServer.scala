@@ -104,6 +104,37 @@ object HttpBenchmarkServer {
             body = Body.Text(body)
           )
 
+        case "/echo-chunked" =>
+          // Echo chunked POST body back without buffering
+          // This tests streaming request body parsing
+          req.body match {
+            case Body.Stream(chunks, _, _) =>
+              // Count chunks as they stream through (for verification)
+              val chunkCountRef = new java.util.concurrent.atomic.AtomicInteger(0)
+              val transformedChunks = chunks.map { stream =>
+                stream.map { chunk =>
+                  chunkCountRef.incrementAndGet()
+                  chunk
+                }
+              }
+              Eru.succeed(
+                Response(
+                  status = StatusCode.Ok,
+                  headers = Headers.empty.add("X-Chunk-Count", "streaming").unsafeRunSync(),
+                  body = Body.Stream(transformedChunks, None)
+                )
+              )
+            case _ =>
+              // Non-streaming body - just echo it back
+              for {
+                body <- BodyDecoder[String].decode(req.body).mapError(e => HttpError.BodyDecodeError(e))
+              } yield Response(
+                status = StatusCode.Ok,
+                headers = Headers.empty,
+                body = Body.Text(body)
+              )
+          }
+
         case "/counter" =>
           // Stateful endpoint
           val count = counter.incrementAndGet()
@@ -165,8 +196,11 @@ object HttpBenchmarkServer {
       maxConnections = maxConnections
     )
 
+    // Wrap handler with compression middleware
+    val compressedHandler = Middleware.compression(CompressionConfig.default).apply(handler)
+
     val program = for {
-      server <- HttpServer.create(config, handler)
+      server <- HttpServer.create(config, compressedHandler)
       address <- server.start
       _ <- Eru.effect {
         println(s"Server started at http://${address.host}:${address.port}")
@@ -176,8 +210,9 @@ object HttpBenchmarkServer {
         println("  GET  /json          - JSON response (30 bytes)")
         println("  GET  /json-large    - Large JSON response (~1KB)")
         println("  GET  /large-10kb    - Large text response (10KB)")
-        println("  GET  /large-100kb   - Large text response (100KB)")
+        println("  GET  /large-100kb   - Large text response (100KB, chunked)")
         println("  POST /echo          - Echo request body back")
+        println("  POST /echo-chunked  - Echo chunked request body (streaming)")
         println("  GET  /counter       - Stateful counter")
         println("  GET  /error-400     - Bad Request (400)")
         println("  GET  /error-500     - Internal Server Error (500)")

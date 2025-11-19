@@ -68,9 +68,12 @@ private[client] final class NativeHttpClient(
       // Add Connection: keep-alive for connection pooling (if not already set)
       requestWithConnection <- addConnectionHeaderIfNeeded(requestWithHost)
 
-      _ <- requestWithConnection.validate.mapError(HttpError.InvalidRequest.apply)
-      encodedBody <- encoder.encode(requestWithConnection.body).mapError(HttpError.BodyEncodeError.apply)
-      encodedRequest = requestWithConnection.copy(body = encodedBody)
+      // Add Accept-Encoding header if automatic decompression is enabled
+      requestWithEncoding <- addAcceptEncodingIfNeeded(requestWithConnection)
+
+      _ <- requestWithEncoding.validate.mapError(HttpError.InvalidRequest.apply)
+      encodedBody <- encoder.encode(requestWithEncoding.body).mapError(HttpError.BodyEncodeError.apply)
+      encodedRequest = requestWithEncoding.copy(body = encodedBody)
 
       // Apply request interceptors
       interceptedRequest <- requestInterceptors.foldLeft(Eru.succeed(encodedRequest)) { (req, interceptor) =>
@@ -256,10 +259,96 @@ private[client] final class NativeHttpClient(
           case e: Throwable => HttpError.NetworkError(s"Read error: ${e.getMessage}", Some(e))
         }
 
+      // Automatically decompress response if enabled
+      decompressedResponse <-
+        if config.automaticDecompression then decompressResponse(response)
+        else Eru.succeed(response)
+
       // Convert body to Bytes
-      responseBytes = convertBodyToBytes(response)
+      responseBytes = convertBodyToBytes(decompressedResponse)
 
     } yield responseBytes
+  }
+
+  /** Automatically decompress response body based on Content-Encoding header.
+    *
+    * If Content-Encoding header is present and matches a supported encoding (gzip, deflate, br),
+    * decompress the body and remove the Content-Encoding header.
+    */
+  private def decompressResponse(response: Response[Body]): Eru[HttpError, Response[Body]] = {
+    response.headers.getFirst(HeaderNames.ContentEncoding) match {
+      case None =>
+        // No Content-Encoding header, return as-is
+        Eru.succeed(response)
+
+      case Some(encodingHeader) =>
+        val encodingStr = encodingHeader.value.toLowerCase.trim
+        val encoding = encodingStr match {
+          case "gzip" => Some(ContentEncoding.Gzip)
+          case "deflate" => Some(ContentEncoding.Deflate)
+          case "br" => Some(ContentEncoding.Brotli)
+          case "identity" => None // identity means no encoding
+          case _ => None // unsupported encoding
+        }
+
+        encoding match {
+          case Some(enc) =>
+            // Decompress the body based on its type
+            response.body match {
+              case Body.Empty => Eru.succeed(response)
+
+              case Body.Text(text, mediaType, charset) =>
+                val bytes = Bytes.fromString(text, charset)
+                Compression.decompress(bytes, enc).flatMap { decompressed =>
+                  val decompressedText = decompressed.asString(charset)
+                  val headersWithoutEncoding = response.headers.remove(HeaderNames.ContentEncoding)
+                  Eru.succeed(response.copy(
+                    headers = headersWithoutEncoding,
+                    body = Body.Text(decompressedText, mediaType, charset)
+                  ))
+                }.mapError(e => HttpError.NetworkError(s"Decompression failed: ${e.message}", None))
+
+              case Body.Binary(bytes, mediaType) =>
+                Compression.decompress(bytes, enc).flatMap { decompressed =>
+                  val headersWithoutEncoding = response.headers.remove(HeaderNames.ContentEncoding)
+                  // Update Content-Length if present
+                  val updatedHeaders = response.headers.getFirst(HeaderNames.ContentLength) match {
+                    case Some(_) =>
+                      headersWithoutEncoding
+                        .add(HeaderNames.ContentLength, decompressed.length.toString)
+                        .attempt
+                        .unsafeRunSync() match {
+                          case Result.Success(h) => h
+                          case Result.Failure(_) => headersWithoutEncoding
+                        }
+                    case None => headersWithoutEncoding
+                  }
+                  Eru.succeed(response.copy(
+                    headers = updatedHeaders,
+                    body = Body.Binary(decompressed, mediaType)
+                  ))
+                }.mapError(e => HttpError.NetworkError(s"Decompression failed: ${e.message}", None))
+
+              case Body.Stream(chunks, _, mediaType) =>
+                // Decompress streaming body chunk-by-chunk
+                chunks.flatMap { stream =>
+                  Compression.decompressStream(stream, enc).flatMap { decompressedStream =>
+                    val headersWithoutEncoding = response.headers.remove(HeaderNames.ContentEncoding)
+                    // Remove Content-Length since it's now unknown
+                    val updatedHeaders = headersWithoutEncoding.remove(HeaderNames.ContentLength)
+                    Eru.succeed(response.copy(
+                      headers = updatedHeaders,
+                      body = Body.Stream(Eru.succeed(decompressedStream), None, mediaType)
+                    ))
+                  }.mapError(e => HttpError.NetworkError(s"Decompression failed: ${e.message}", None))
+                }.mapError(e => HttpError.NetworkError(e.toString, None))
+            }
+
+          case None =>
+            // identity encoding or unsupported, return as-is
+            Eru.succeed(response)
+        }
+    }
   }
 
   /** Determine if a connection should be reused based on HTTP/1.1 keep-alive semantics.
@@ -344,6 +433,24 @@ private[client] final class NativeHttpClient(
         .add(HeaderNames.Connection, "keep-alive")
         .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Connection header: $e", "RFC 9110")))
         .map(newHeaders => request.copy(headers = newHeaders))
+    }
+  }
+
+  /** Add Accept-Encoding header if automatic decompression is enabled and header not already present
+    */
+  private def addAcceptEncodingIfNeeded[A](request: Request[A]): Eru[HttpError, Request[A]] = {
+    if !config.automaticDecompression || request.headers.contains(HeaderNames.AcceptEncoding) then {
+      Eru.succeed(request)
+    } else {
+      val encodings = config.acceptEncoding.map(_.value).mkString(", ")
+      if encodings.nonEmpty then {
+        request.headers
+          .add(HeaderNames.AcceptEncoding, encodings)
+          .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Accept-Encoding header: $e", "RFC 9110")))
+          .map(newHeaders => request.copy(headers = newHeaders))
+      } else {
+        Eru.succeed(request)
+      }
     }
   }
 
