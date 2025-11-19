@@ -39,11 +39,13 @@ object HttpWriter {
       // Write request line + headers + empty line
       val headerBytes = (requestLine + headersStr + CRLF).getBytes(StandardCharsets.UTF_8)
       writeAll(socket, ByteBuffer.wrap(headerBytes))
-
+    }.flatMap { _ =>
       // Write body
       writeBody(socket, request.body)
-    }.mapError { case e: Exception =>
-      HttpError.NetworkError(s"Error writing request: ${e.getMessage}", Some(e))
+    }.mapError {
+      case e: HttpError => e
+      case e: Exception => HttpError.NetworkError(s"Error writing request: ${e.getMessage}", Some(e))
+      case e: Throwable => HttpError.NetworkError(s"Error writing request: ${e.getMessage}", Some(e))
     }
 
   /** Write an HTTP request to a socket channel using a pooled ByteBuffer.
@@ -88,11 +90,13 @@ object HttpWriter {
       buffer.put(headerBytes)
       buffer.flip()
       writeAll(socket, buffer)
-
+    }.flatMap { _ =>
       // Write body (still allocates for body, but headers are pooled)
       writeBody(socket, request.body)
-    }.mapError { case e: Exception =>
-      HttpError.NetworkError(s"Error writing request: ${e.getMessage}", Some(e))
+    }.mapError {
+      case e: HttpError => e
+      case e: Exception => HttpError.NetworkError(s"Error writing request: ${e.getMessage}", Some(e))
+      case e: Throwable => HttpError.NetworkError(s"Error writing request: ${e.getMessage}", Some(e))
     }
 
   /** Write an HTTP response to a socket channel.
@@ -117,11 +121,13 @@ object HttpWriter {
       // Write status line + headers + empty line
       val headerBytes = (statusLine + headersStr + CRLF).getBytes(StandardCharsets.UTF_8)
       writeAll(socket, ByteBuffer.wrap(headerBytes))
-
+    }.flatMap { _ =>
       // Write body
       writeBody(socket, response.body)
-    }.mapError { case e: Exception =>
-      HttpError.NetworkError(s"Error writing response: ${e.getMessage}", Some(e))
+    }.mapError {
+      case e: HttpError => e
+      case e: Exception => HttpError.NetworkError(s"Error writing response: ${e.getMessage}", Some(e))
+      case e: Throwable => HttpError.NetworkError(s"Error writing response: ${e.getMessage}", Some(e))
     }
 
   /** Write an HTTP response to a socket channel using a reusable ByteBuffer.
@@ -171,11 +177,13 @@ object HttpWriter {
       // Flip buffer and write to socket
       buffer.flip()
       writeAll(socket, buffer)
-
+    }.flatMap { _ =>
       // Write body (still allocates for body, but headers are zero-allocation)
       writeBody(socket, response.body)
-    }.mapError { case e: Exception =>
-      HttpError.NetworkError(s"Error writing response: ${e.getMessage}", Some(e))
+    }.mapError {
+      case e: HttpError => e
+      case e: Exception => HttpError.NetworkError(s"Error writing response: ${e.getMessage}", Some(e))
+      case e: Throwable => HttpError.NetworkError(s"Error writing response: ${e.getMessage}", Some(e))
     }
 
   /** Write a string to ByteBuffer as UTF-8 bytes (assumes ASCII for performance).
@@ -235,22 +243,99 @@ object HttpWriter {
 
   /** Write message body to socket
     */
-  private def writeBody(socket: SocketChannel, body: Body): Unit = {
+  private def writeBody(socket: SocketChannel, body: Body): Eru[HttpError, Unit] = {
     body match {
       case Body.Empty =>
         // No body to write
-        ()
+        Eru.unit
 
       case Body.Text(text, _, charset) =>
-        val bytes = text.getBytes(charset.toJavaCharset)
-        writeAll(socket, ByteBuffer.wrap(bytes))
+        Eru.effect {
+          val bytes = text.getBytes(charset.toJavaCharset)
+          writeAll(socket, ByteBuffer.wrap(bytes))
+        }.mapError(e => HttpError.NetworkError(s"Error writing text body: ${e.getMessage}", Some(e)))
 
       case Body.Binary(bytes, _) =>
-        writeAll(socket, ByteBuffer.wrap(bytes.toArray))
+        Eru.effect {
+          writeAll(socket, ByteBuffer.wrap(bytes.toArray))
+        }.mapError(e => HttpError.NetworkError(s"Error writing binary body: ${e.getMessage}", Some(e)))
 
-      case Body.Stream(_, _, _) =>
-        // TODO: Implement streaming body support
-        throw new UnsupportedOperationException("Streaming bodies not yet supported")
+      case Body.Stream(chunks, contentLength, _) =>
+        contentLength match {
+          case Some(length) =>
+            writeStreamWithLength(socket, chunks, length)
+          case None =>
+            writeChunkedStream(socket, chunks)
+        }
+    }
+  }
+
+  /** Write streaming body with chunked transfer encoding.
+    *
+    * Uses HTTP/1.1 chunked encoding: each chunk is prefixed with its size in hex,
+    * followed by CRLF, then the chunk data, then CRLF. Final chunk is "0\r\n\r\n".
+    */
+  private def writeChunkedStream(socket: SocketChannel, chunks: Eru[Nothing, ChunkStream]): Eru[HttpError, Unit] = {
+    chunks.flatMap { stream =>
+      def writeChunks(s: ChunkStream): Eru[HttpError, Unit] = {
+        s.pull.flatMap {
+          case Some((chunk, nextStream)) if chunk.nonEmpty =>
+            // Write chunk in chunked encoding format
+            Eru.effect {
+              val chunkSize = Integer.toHexString(chunk.size)
+              writeAll(socket, ByteBuffer.wrap((chunkSize + CRLF).getBytes(StandardCharsets.UTF_8)))
+              writeAll(socket, ByteBuffer.wrap(chunk.bytes.toArray))
+              writeAll(socket, ByteBuffer.wrap(CRLF.getBytes(StandardCharsets.UTF_8)))
+            }.mapError { case e: Exception => HttpError.NetworkError(s"Error writing chunk: ${e.getMessage}", Some(e)) }
+             .flatMap(_ => writeChunks(nextStream))
+
+          case Some((_, nextStream)) =>
+            // Empty chunk, skip and continue
+            writeChunks(nextStream)
+
+          case None =>
+            // End of stream - write final chunk
+            Eru.effect {
+              writeAll(socket, ByteBuffer.wrap(s"0$CRLF$CRLF".getBytes(StandardCharsets.UTF_8)))
+            }.mapError { case e: Exception => HttpError.NetworkError(s"Error writing final chunk: ${e.getMessage}", Some(e)) }
+        }
+      }
+      writeChunks(stream)
+    }
+  }
+
+  /** Write streaming body with fixed content length.
+    *
+    * Pulls chunks and writes them directly until the specified length is reached.
+    */
+  private def writeStreamWithLength(socket: SocketChannel, chunks: Eru[Nothing, ChunkStream], length: Long): Eru[HttpError, Unit] = {
+    chunks.flatMap { stream =>
+      def writeChunks(s: ChunkStream, bytesWritten: Long): Eru[HttpError, Unit] = {
+        if bytesWritten >= length then Eru.unit
+        else {
+          s.pull.flatMap {
+            case Some((chunk, nextStream)) if chunk.nonEmpty =>
+              val toWrite = math.min(chunk.size, (length - bytesWritten).toInt)
+              Eru.effect {
+                val data = if toWrite == chunk.size then chunk.bytes.toArray else chunk.bytes.toArray.take(toWrite)
+                writeAll(socket, ByteBuffer.wrap(data))
+              }.mapError { case e: Exception => HttpError.NetworkError(s"Error writing chunk: ${e.getMessage}", Some(e)) }
+               .flatMap(_ => writeChunks(nextStream, bytesWritten + toWrite))
+
+            case Some((_, nextStream)) =>
+              // Empty chunk, skip and continue
+              writeChunks(nextStream, bytesWritten)
+
+            case None =>
+              // Stream exhausted - check if we wrote enough
+              if bytesWritten < length then
+                Eru.fail(HttpError.NetworkError(s"Stream exhausted after $bytesWritten bytes, expected $length", None))
+              else
+                Eru.unit
+          }
+        }
+      }
+      writeChunks(stream, 0L)
     }
   }
 

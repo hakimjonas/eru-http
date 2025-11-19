@@ -196,33 +196,55 @@ private[server] final class NativeHttpServer(
     }
   }
 
-  /** Add Connection and Content-Length headers to response if not present.
+  /** Add Connection and Content-Length/Transfer-Encoding headers to response if not present.
     *
-    * HTTP/1.1 requires either Content-Length or Connection: close for message framing. This ensures
+    * HTTP/1.1 requires either Content-Length or Transfer-Encoding for message framing. This ensures
     * we send proper headers for keep-alive support.
     *
     * If the client requests Connection: close, we echo it back in the response.
     */
   private def addConnectionHeader(request: Request[Body], response: Response[Body]): Response[Body] = {
-    // First, ensure Content-Length is set if there's a body
-    val withContentLength = if response.headers.contains(HeaderNames.ContentLength) then {
+    // First, ensure Content-Length or Transfer-Encoding is set
+    val withContentLength = if response.headers.contains(HeaderNames.ContentLength) ||
+                                response.headers.contains(HeaderNames.TransferEncoding) then {
       response
     } else {
       // Calculate content length based on body type
-      val bodyLength = response.body match {
-        case Body.Empty => 0
-        case Body.Text(text, _, charset) => text.getBytes(charset.toJavaCharset).length
-        case Body.Binary(bytes, _) => bytes.length
-        case Body.Stream(_, _, _) => -1 // Cannot determine length for streams
-      }
+      response.body match {
+        case Body.Empty =>
+          response.headers.add(HeaderNames.ContentLength, "0").attempt.unsafeRunSync() match {
+            case Result.Success(newHeaders) => response.copy(headers = newHeaders)
+            case Result.Failure(_) => response
+          }
 
-      if bodyLength >= 0 then {
-        response.headers.add(HeaderNames.ContentLength, bodyLength.toString).attempt.unsafeRunSync() match {
-          case Result.Success(newHeaders) => response.copy(headers = newHeaders)
-          case Result.Failure(_) => response
-        }
-      } else {
-        response // Streams will need Connection: close or chunked encoding
+        case Body.Text(text, _, charset) =>
+          val length = text.getBytes(charset.toJavaCharset).length
+          response.headers.add(HeaderNames.ContentLength, length.toString).attempt.unsafeRunSync() match {
+            case Result.Success(newHeaders) => response.copy(headers = newHeaders)
+            case Result.Failure(_) => response
+          }
+
+        case Body.Binary(bytes, _) =>
+          response.headers.add(HeaderNames.ContentLength, bytes.length.toString).attempt.unsafeRunSync() match {
+            case Result.Success(newHeaders) => response.copy(headers = newHeaders)
+            case Result.Failure(_) => response
+          }
+
+        case Body.Stream(_, contentLength, _) =>
+          contentLength match {
+            case Some(length) =>
+              // Stream with known length - use Content-Length
+              response.headers.add(HeaderNames.ContentLength, length.toString).attempt.unsafeRunSync() match {
+                case Result.Success(newHeaders) => response.copy(headers = newHeaders)
+                case Result.Failure(_) => response
+              }
+            case None =>
+              // Stream with unknown length - use chunked encoding
+              response.headers.add(HeaderNames.TransferEncoding, "chunked").attempt.unsafeRunSync() match {
+                case Result.Success(newHeaders) => response.copy(headers = newHeaders)
+                case Result.Failure(_) => response
+              }
+          }
       }
     }
 
