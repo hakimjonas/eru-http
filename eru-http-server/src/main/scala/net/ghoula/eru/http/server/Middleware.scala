@@ -343,8 +343,8 @@ object Middleware {
 
   /** Response compression middleware.
     *
-    * Compresses response bodies based on Accept-Encoding request header.
-    * Supports gzip, deflate, and brotli compression.
+    * Compresses response bodies based on Accept-Encoding request header. Supports gzip, deflate,
+    * and brotli compression.
     *
     * @param config
     *   Compression configuration
@@ -448,10 +448,12 @@ object Middleware {
               .flatMap { r =>
                 // Remove Content-Length since compression changes size
                 val headersWithoutLength = r.headers.remove(HeaderNames.ContentLength)
-                Eru.succeed(r.copy(
-                  headers = headersWithoutLength,
-                  body = Body.Stream(Eru.succeed(compressedStream), None, mediaType)
-                ))
+                Eru.succeed(
+                  r.copy(
+                    headers = headersWithoutLength,
+                    body = Body.Stream(Eru.succeed(compressedStream), None, mediaType)
+                  )
+                )
               }
               .mapError {
                 case e: HeaderName.InvalidHeaderName =>
@@ -502,7 +504,8 @@ object CORSConfig {
 
 /** Compression middleware configuration. */
 final case class CompressionConfig(
-  /** Minimum response size (in bytes) to compress. Responses smaller than this are not compressed. */
+  /** Minimum response size (in bytes) to compress. Responses smaller than this are not compressed.
+    */
   minSize: Long = 1024,
   /** Preferred compression encodings in order of preference. */
   preferredEncodings: List[ContentEncoding] = List(

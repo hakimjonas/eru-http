@@ -23,6 +23,15 @@ class HttpServerIntegrationSpec extends FunSuite {
 
   given runtime: EruRuntime = EruRuntime.shared
 
+  override def afterAll(): Unit = {
+    try {
+      EruRuntime.shared.cleanup()
+    } catch {
+      case _: Exception => ()
+    }
+    super.afterAll()
+  }
+
   // ===== HTTP/1.1 Keep-Alive Tests =====
 
   test("HttpServer - sends Connection: keep-alive header by default") {

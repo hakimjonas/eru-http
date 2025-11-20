@@ -12,6 +12,15 @@ class MiddlewareSpec extends FunSuite {
 
   given runtime: EruRuntime = EruRuntime.shared
 
+  override def afterAll(): Unit = {
+    try {
+      EruRuntime.shared.cleanup()
+    } catch {
+      case _: Exception => ()
+    }
+    super.afterAll()
+  }
+
   // Helper to parse URI
   private def uri(s: String): Uri =
     Uri.parse(s).assertSuccess

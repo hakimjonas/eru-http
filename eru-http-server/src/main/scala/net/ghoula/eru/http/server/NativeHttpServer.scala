@@ -32,6 +32,9 @@ private[server] final class NativeHttpServer(
 
   private val running = new AtomicBoolean(true)
 
+  // Track active client sockets so we can close them during shutdown
+  private val activeClients = new java.util.concurrent.ConcurrentHashMap[SocketChannel, java.lang.Boolean]()
+
   def start: Eru[HttpError, ServerAddress] = for {
     _ <- Eru.effect {
       serverSocket.configureBlocking(true) // Blocking is GOOD on Virtual Threads!
@@ -47,8 +50,9 @@ private[server] final class NativeHttpServer(
       }
     }.mapError(e => HttpError.NetworkError(s"Failed to get address: ${e.getMessage}", Some(e)))
 
-    // Start accept loop on its own Virtual Thread
-    _ <- acceptLoop.fork
+    // Start accept loop on its own Virtual Thread as daemon (no tracking)
+    // Use forkDaemon to prevent rootFibers accumulation in long-running server
+    _ <- acceptLoop.forkDaemon
 
   } yield address
 
@@ -98,6 +102,9 @@ private[server] final class NativeHttpServer(
     * cycle is a simple for-comprehension!
     */
   private def handleClient(socket: SocketChannel): Eru[HttpError, Unit] = {
+    // Register this client socket
+    activeClients.put(socket, java.lang.Boolean.TRUE)
+
     val clientEffect = for {
       // Wrap with TLS if configured
       secureSocket <- sslContext match {
@@ -110,8 +117,11 @@ private[server] final class NativeHttpServer(
 
     } yield ()
 
-    // Ensure socket is closed even if errors occur
-    val cleanup = Eru.effect { socket.close() }.attempt.map(_ => ())
+    // Ensure socket is closed and unregistered even if errors occur
+    val cleanup = Eru.effect {
+      activeClients.remove(socket)
+      socket.close()
+    }.attempt.map(_ => ())
 
     clientEffect.attempt.flatMap { _ => cleanup }
   }
@@ -205,48 +215,50 @@ private[server] final class NativeHttpServer(
     */
   private def addConnectionHeader(request: Request[Body], response: Response[Body]): Response[Body] = {
     // First, ensure Content-Length or Transfer-Encoding is set
-    val withContentLength = if response.headers.contains(HeaderNames.ContentLength) ||
-                                response.headers.contains(HeaderNames.TransferEncoding) then {
-      response
-    } else {
-      // Calculate content length based on body type
-      response.body match {
-        case Body.Empty =>
-          response.headers.add(HeaderNames.ContentLength, "0").attempt.unsafeRunSync() match {
-            case Result.Success(newHeaders) => response.copy(headers = newHeaders)
-            case Result.Failure(_) => response
-          }
+    val withContentLength =
+      if response.headers.contains(HeaderNames.ContentLength) ||
+        response.headers.contains(HeaderNames.TransferEncoding)
+      then {
+        response
+      } else {
+        // Calculate content length based on body type
+        response.body match {
+          case Body.Empty =>
+            response.headers.add(HeaderNames.ContentLength, "0").attempt.unsafeRunSync() match {
+              case Result.Success(newHeaders) => response.copy(headers = newHeaders)
+              case Result.Failure(_) => response
+            }
 
-        case Body.Text(text, _, charset) =>
-          val length = text.getBytes(charset.toJavaCharset).length
-          response.headers.add(HeaderNames.ContentLength, length.toString).attempt.unsafeRunSync() match {
-            case Result.Success(newHeaders) => response.copy(headers = newHeaders)
-            case Result.Failure(_) => response
-          }
+          case Body.Text(text, _, charset) =>
+            val length = text.getBytes(charset.toJavaCharset).length
+            response.headers.add(HeaderNames.ContentLength, length.toString).attempt.unsafeRunSync() match {
+              case Result.Success(newHeaders) => response.copy(headers = newHeaders)
+              case Result.Failure(_) => response
+            }
 
-        case Body.Binary(bytes, _) =>
-          response.headers.add(HeaderNames.ContentLength, bytes.length.toString).attempt.unsafeRunSync() match {
-            case Result.Success(newHeaders) => response.copy(headers = newHeaders)
-            case Result.Failure(_) => response
-          }
+          case Body.Binary(bytes, _) =>
+            response.headers.add(HeaderNames.ContentLength, bytes.length.toString).attempt.unsafeRunSync() match {
+              case Result.Success(newHeaders) => response.copy(headers = newHeaders)
+              case Result.Failure(_) => response
+            }
 
-        case Body.Stream(_, contentLength, _) =>
-          contentLength match {
-            case Some(length) =>
-              // Stream with known length - use Content-Length
-              response.headers.add(HeaderNames.ContentLength, length.toString).attempt.unsafeRunSync() match {
-                case Result.Success(newHeaders) => response.copy(headers = newHeaders)
-                case Result.Failure(_) => response
-              }
-            case None =>
-              // Stream with unknown length - use chunked encoding
-              response.headers.add(HeaderNames.TransferEncoding, "chunked").attempt.unsafeRunSync() match {
-                case Result.Success(newHeaders) => response.copy(headers = newHeaders)
-                case Result.Failure(_) => response
-              }
-          }
+          case Body.Stream(_, contentLength, _) =>
+            contentLength match {
+              case Some(length) =>
+                // Stream with known length - use Content-Length
+                response.headers.add(HeaderNames.ContentLength, length.toString).attempt.unsafeRunSync() match {
+                  case Result.Success(newHeaders) => response.copy(headers = newHeaders)
+                  case Result.Failure(_) => response
+                }
+              case None =>
+                // Stream with unknown length - use chunked encoding
+                response.headers.add(HeaderNames.TransferEncoding, "chunked").attempt.unsafeRunSync() match {
+                  case Result.Success(newHeaders) => response.copy(headers = newHeaders)
+                  case Result.Failure(_) => response
+                }
+            }
+        }
       }
-    }
 
     // Then add Connection header if not present
     if withContentLength.headers.contains(HeaderNames.Connection) then {
@@ -322,7 +334,27 @@ private[server] final class NativeHttpServer(
   def shutdown: Eru[HttpError, Unit] = {
     if running.compareAndSet(true, false) then {
       Eru.effect {
+        // Close server socket to stop accepting new connections
         serverSocket.close()
+
+        // Close all active client connections to interrupt blocked handleClient fibers
+        // This is critical! Without this, daemon fibers remain blocked on socket I/O
+        val clients = activeClients.keys()
+        while clients.hasMoreElements() do {
+          val clientSocket = clients.nextElement()
+          try {
+            clientSocket.close()
+          } catch {
+            case _: Exception => () // Ignore errors closing individual clients
+          }
+        }
+
+        // Give daemon fibers a moment to handle socket closure exceptions and exit
+        // Without this delay, daemon Virtual Threads may still be in the process
+        // of shutting down when the next test starts. 100ms is conservative but ensures
+        // all cleanup completes even under heavy concurrent test load.
+        Thread.sleep(100)
+
         ()
       }.mapError(e => HttpError.NetworkError(s"Error during shutdown: ${e.getMessage}", Some(e)))
     } else {

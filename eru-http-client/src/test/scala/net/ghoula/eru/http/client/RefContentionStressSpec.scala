@@ -2,12 +2,9 @@ package net.ghoula.eru.http.client
 
 import munit.FunSuite
 
-import java.nio.channels.SocketChannel
-import java.time.Instant
 import scala.concurrent.duration.*
 
 import net.ghoula.eru.*
-import net.ghoula.eru.http.*
 import net.ghoula.eru.prelude.*
 
 /** Extreme stress tests for Ref contention in connection pool.
@@ -22,7 +19,16 @@ import net.ghoula.eru.prelude.*
   */
 class RefContentionStressSpec extends FunSuite {
 
-  given runtime: EruRuntime = EruRuntime.create()
+  given runtime: EruRuntime = EruRuntime.shared
+
+  override def afterAll(): Unit = {
+    try {
+      EruRuntime.shared.cleanup()
+    } catch {
+      case _: Exception => ()
+    }
+    super.afterAll()
+  }
 
   val stressConfig: HttpClientConfig = HttpClientConfig(
     connectTimeout = 10.seconds,
@@ -32,23 +38,23 @@ class RefContentionStressSpec extends FunSuite {
   )
 
   test("STRESS: 1000 concurrent acquire/release operations") {
-    val pool = ConnectionPool.create(stressConfig).unsafeRunSync()
-
-    // Create 100 mock connections (we'll cycle through them)
-    val mockConnections = (1 to 100).map { i =>
-      val socket = createMockSocket()
-      PooledConnection(socket, s"host${i % 10}.com", 80, Instant.now(), Instant.now())
+    // Start 10 test servers on different ports
+    val servers = (0 until 10).map { i =>
+      TestHttpServer.simple(port = 0, body = s"Server $i")
     }.toList
+
+    val hosts = servers.map(s => ("localhost", s.port))
+
+    val pool = ConnectionPool.create(stressConfig).unsafeRunSync()
 
     val operations = 1000
     val startTime = System.nanoTime()
 
     // Launch 1000 concurrent fibers, each doing acquire/release
     val fibers = (1 to operations).map { i =>
-      val conn = mockConnections(i % mockConnections.length)
+      val (host, port) = hosts(i % hosts.length)
       for {
-        _ <- pool.release(conn) // Put it in pool first
-        acquired <- pool.acquire(conn.host, conn.port)
+        acquired <- pool.acquire(host, port)
         _ <- pool.release(acquired)
       } yield ()
     }.toList
@@ -70,26 +76,27 @@ class RefContentionStressSpec extends FunSuite {
     }
 
     pool.shutdown.unsafeRunSync()
+    servers.foreach(_.shutdown())
   }
 
   test("STRESS: 2000 concurrent operations with hot spots") {
-    val pool = ConnectionPool.create(stressConfig).unsafeRunSync()
-
-    // Create connections for only 3 hosts - MAXIMUM CONTENTION
-    val mockConnections = (1 to 30).map { i =>
-      val socket = createMockSocket()
-      PooledConnection(socket, s"hotspot${i % 3}.com", 80, Instant.now(), Instant.now())
+    // Use only 3 servers - MAXIMUM CONTENTION
+    val servers = (0 until 3).map { i =>
+      TestHttpServer.simple(port = 0, body = s"Hotspot $i")
     }.toList
+
+    val hosts = servers.map(s => ("localhost", s.port))
+
+    val pool = ConnectionPool.create(stressConfig).unsafeRunSync()
 
     val operations = 2000
     val startTime = System.nanoTime()
 
     // All operations fight over the SAME 3 hosts
     val fibers = (1 to operations).map { i =>
-      val conn = mockConnections(i % mockConnections.length)
+      val (host, port) = hosts(i % hosts.length)
       for {
-        _ <- pool.release(conn)
-        acquired <- pool.acquire(conn.host, conn.port)
+        acquired <- pool.acquire(host, port)
         _ <- pool.release(acquired)
       } yield ()
     }.toList
@@ -112,28 +119,30 @@ class RefContentionStressSpec extends FunSuite {
     }
 
     pool.shutdown.unsafeRunSync()
+    servers.foreach(_.shutdown())
   }
 
   test("STRESS: Measure latency distribution under 500 concurrent ops") {
-    val pool = ConnectionPool.create(stressConfig).unsafeRunSync()
-
-    val mockConnections = (1 to 50).map { i =>
-      val socket = createMockSocket()
-      PooledConnection(socket, s"host${i % 5}.com", 80, Instant.now(), Instant.now())
+    // Use 5 servers for moderate contention
+    val servers = (0 until 5).map { i =>
+      TestHttpServer.simple(port = 0, body = s"Server $i")
     }.toList
+
+    val hosts = servers.map(s => ("localhost", s.port))
+
+    val pool = ConnectionPool.create(stressConfig).unsafeRunSync()
 
     val operations = 500
     val latencies = new java.util.concurrent.ConcurrentLinkedQueue[Long]()
 
     // Measure per-operation latency
     val fibers = (1 to operations).map { i =>
-      val conn = mockConnections(i % mockConnections.length)
+      val (host, port) = hosts(i % hosts.length)
       for {
-        _ <- pool.release(conn)
-        start = System.nanoTime()
-        acquired <- pool.acquire(conn.host, conn.port)
-        end = System.nanoTime()
-        _ = latencies.add((end - start) / 1_000_000) // Convert to ms
+        start <- Eru.effect(System.nanoTime())
+        acquired <- pool.acquire(host, port)
+        end <- Eru.effect(System.nanoTime())
+        _ <- Eru.effect(latencies.add((end - start) / 1_000_000)) // Convert to ms
         _ <- pool.release(acquired)
       } yield ()
     }.toList
@@ -171,15 +180,18 @@ class RefContentionStressSpec extends FunSuite {
     }
 
     pool.shutdown.unsafeRunSync()
+    servers.foreach(_.shutdown())
   }
 
   test("STRESS: Sustained load - 5000 operations over time") {
-    val pool = ConnectionPool.create(stressConfig).unsafeRunSync()
-
-    val mockConnections = (1 to 100).map { i =>
-      val socket = createMockSocket()
-      PooledConnection(socket, s"host${i % 10}.com", 80, Instant.now(), Instant.now())
+    // Use 10 servers for distribution
+    val servers = (0 until 10).map { i =>
+      TestHttpServer.simple(port = 0, body = s"Server $i")
     }.toList
+
+    val hosts = servers.map(s => ("localhost", s.port))
+
+    val pool = ConnectionPool.create(stressConfig).unsafeRunSync()
 
     val totalOperations = 5000
     val batchSize = 100
@@ -191,10 +203,9 @@ class RefContentionStressSpec extends FunSuite {
     val result = Eru
       .foreach((1 to batches).toList) { batch =>
         val fibers = (1 to batchSize).map { i =>
-          val conn = mockConnections((batch * batchSize + i) % mockConnections.length)
+          val (host, port) = hosts((batch * batchSize + i) % hosts.length)
           for {
-            _ <- pool.release(conn)
-            acquired <- pool.acquire(conn.host, conn.port)
+            acquired <- pool.acquire(host, port)
             _ <- pool.release(acquired)
           } yield ()
         }.toList
@@ -219,12 +230,6 @@ class RefContentionStressSpec extends FunSuite {
     }
 
     pool.shutdown.unsafeRunSync()
-  }
-
-  // Helper to create mock socket
-  private def createMockSocket(): SocketChannel = {
-    val socket = SocketChannel.open()
-    socket.configureBlocking(false)
-    socket
+    servers.foreach(_.shutdown())
   }
 }

@@ -20,7 +20,16 @@ import net.ghoula.eru.prelude.*
   */
 class HttpClientPoolingSpec extends FunSuite {
 
-  given runtime: EruRuntime = EruRuntime.create()
+  given runtime: EruRuntime = EruRuntime.shared
+
+  override def afterAll(): Unit = {
+    try {
+      EruRuntime.shared.cleanup()
+    } catch {
+      case _: Exception => ()
+    }
+    super.afterAll()
+  }
 
   // Test helpers
   extension [E, A](eru: Eru[E, A]) {

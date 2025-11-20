@@ -12,6 +12,15 @@ class HttpServerSpec extends FunSuite {
 
   given runtime: EruRuntime = EruRuntime.shared
 
+  override def afterAll(): Unit = {
+    try {
+      EruRuntime.shared.cleanup()
+    } catch {
+      case _: Exception => ()
+    }
+    super.afterAll()
+  }
+
   // ===== Server Lifecycle Tests =====
 
   test("HttpServer - create and start server") {

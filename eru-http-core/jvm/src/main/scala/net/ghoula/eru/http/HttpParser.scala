@@ -290,35 +290,65 @@ object HttpParser {
     *   3. Connection close (for responses only)
     */
 
-  /** Read chunked message body (Transfer-Encoding: chunked) - buffered version
+  /** Read chunked message body (Transfer-Encoding: chunked) - streaming version
     *
     * RFC 9112 Section 7.1: Chunked transfer coding Format: chunk-size CRLF chunk-data CRLF ... 0
     * CRLF CRLF
+    *
+    * Returns Body.Stream to avoid buffering the entire body in memory.
     */
   private def readChunkedBodyBuffered(reader: BufferedSocketReader): Eru[HttpError, Body] = {
-    def readChunks(accumulator: Array[Byte]): Eru[HttpError, Body] = {
-      for {
-        chunkSizeLine <- readLineBuffered(reader)
-        chunkSize <- parseChunkSize(chunkSizeLine)
-        result <-
-          if chunkSize == 0 then {
-            // Last chunk, read trailing headers (we ignore them for now)
-            readLineBuffered(reader).flatMap { _ =>
-              Eru.succeed(Body.Binary(Bytes.fromArray(accumulator), None))
-            }
-          } else {
-            for {
-              bytes <- Eru.effect(reader.readBytes(chunkSize)).mapError { case e: Exception =>
-                HttpError.NetworkError(s"Error reading chunk: ${e.getMessage}", Some(e))
-              }
-              _ <- readLineBuffered(reader) // Read trailing CRLF after chunk data
-              result <- readChunks(accumulator ++ bytes)
-            } yield result
-          }
-      } yield result
-    }
+    // Create a streaming ChunkStream that lazily reads chunks from the socket
+    val chunkStream = createChunkStreamFromReader(reader)
+    Eru.succeed(Body.Stream(chunks = Eru.succeed(chunkStream), contentLength = None))
+  }
 
-    readChunks(Array.empty[Byte])
+  /** Creates a ChunkStream that lazily reads chunks from a BufferedSocketReader.
+    *
+    * This implements pull-based streaming - chunks are only read when pulled from the stream. This
+    * avoids buffering the entire request body in memory.
+    */
+  private def createChunkStreamFromReader(reader: BufferedSocketReader): ChunkStream = {
+    ChunkStream.eval {
+      readNextChunkFromReader(reader).attempt.map {
+        case Result.Success(Some(chunk)) =>
+          // More chunks available - prepend chunk and continue reading
+          ChunkStream.single(chunk) ++ createChunkStreamFromReader(reader)
+
+        case Result.Success(None) =>
+          // End of chunked stream (got 0-sized chunk)
+          ChunkStream.Empty
+
+        case Result.Failure(_) =>
+          // Error reading chunk - terminate stream
+          ChunkStream.Empty
+      }
+    }
+  }
+
+  /** Read the next chunk from the reader.
+    *
+    * Returns None when the final 0-sized chunk is encountered (end of stream). Throws HttpError on
+    * parse errors or I/O errors.
+    */
+  private def readNextChunkFromReader(reader: BufferedSocketReader): Eru[HttpError, Option[Chunk]] = {
+    for {
+      chunkSizeLine <- readLineBuffered(reader)
+      chunkSize <- parseChunkSize(chunkSizeLine)
+      result <-
+        if chunkSize == 0 then {
+          // Final chunk - read trailing CRLF and return None to signal end
+          readLineBuffered(reader).map(_ => None)
+        } else {
+          // Read chunk data and trailing CRLF
+          for {
+            bytes <- Eru.effect(reader.readBytes(chunkSize)).mapError { case e: Exception =>
+              HttpError.NetworkError(s"Error reading chunk: ${e.getMessage}", Some(e))
+            }
+            _ <- readLineBuffered(reader) // Read trailing CRLF after chunk data
+          } yield Some(Chunk.fromBytes(Bytes.fromArray(bytes)))
+        }
+    } yield result
   }
 
   /** Parse chunk size from hex string (may include chunk extensions)

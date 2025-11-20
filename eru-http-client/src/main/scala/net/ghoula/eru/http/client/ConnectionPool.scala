@@ -357,6 +357,10 @@ private[client] final class NativeConnectionPool(
       _ <- stateRef.update { state =>
         removeConnection(state, conn)
       }
+      // Release semaphore permits (connection no longer in pool)
+      hostSem <- getHostSemaphore(conn.key)
+      _ <- hostSem.release.eru.mapError(e => HttpError.NetworkError(s"Failed to release host permit: $e", None))
+      _ <- globalSem.release.eru.mapError(e => HttpError.NetworkError(s"Failed to release global permit: $e", None))
     } yield ()
   }
 

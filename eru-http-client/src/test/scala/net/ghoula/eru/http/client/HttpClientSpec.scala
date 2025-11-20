@@ -6,11 +6,21 @@ import scala.concurrent.duration.*
 
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
-import net.ghoula.eru.prelude.defaultRuntime
 
 import TestHelpers.*
 
 class HttpClientSpec extends FunSuite {
+
+  given runtime: EruRuntime = EruRuntime.shared
+
+  override def afterAll(): Unit = {
+    try {
+      EruRuntime.shared.cleanup()
+    } catch {
+      case _: Exception => ()
+    }
+    super.afterAll()
+  }
 
   // Helper to convert URI errors to HTTP errors
   private def parseUri(url: String): Eru[HttpError, Uri] =
@@ -473,7 +483,8 @@ class HttpClientSpec extends FunSuite {
     // Create server that returns compressed response
     val server = TestHttpServer.create(handler = (_, _) => {
       val largeText = "x" * 10240
-      val compressed = Compression.compress(Bytes.fromString(largeText, Charset.UTF8), ContentEncoding.Gzip).unsafeRunSync()
+      val compressed =
+        Compression.compress(Bytes.fromString(largeText, Charset.UTF8), ContentEncoding.Gzip).unsafeRunSync()
       TestHttpServer.ResponseConfig(
         status = StatusCode.Ok,
         binaryBody = Some(compressed), // Send as binary
@@ -508,7 +519,8 @@ class HttpClientSpec extends FunSuite {
   test("HttpClient - skips decompression when automaticDecompression is false") {
     val server = TestHttpServer.create(handler = (_, _) => {
       val largeText = "x" * 10240
-      val compressed = Compression.compress(Bytes.fromString(largeText, Charset.UTF8), ContentEncoding.Gzip).unsafeRunSync()
+      val compressed =
+        Compression.compress(Bytes.fromString(largeText, Charset.UTF8), ContentEncoding.Gzip).unsafeRunSync()
       TestHttpServer.ResponseConfig(
         status = StatusCode.Ok,
         binaryBody = Some(compressed), // Send as binary

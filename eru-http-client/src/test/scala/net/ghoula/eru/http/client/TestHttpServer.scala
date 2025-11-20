@@ -38,7 +38,7 @@ object TestHttpServer {
     headers: Map[String, String] = Map.empty,
     delay: Duration = Duration.Zero,
     redirectTo: Option[String] = None,
-    binaryBody: Option[Bytes] = None  // For binary responses like compressed data
+    binaryBody: Option[Bytes] = None // For binary responses like compressed data
   )
 
   private val requestCounter = new AtomicInteger(0)

@@ -6,11 +6,21 @@ import scala.collection.mutable.ListBuffer
 
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
-import net.ghoula.eru.prelude.defaultRuntime
 
 import TestHelpers.*
 
 class InterceptorSpec extends FunSuite {
+
+  given runtime: EruRuntime = EruRuntime.shared
+
+  override def afterAll(): Unit = {
+    try {
+      EruRuntime.shared.cleanup()
+    } catch {
+      case _: Exception => ()
+    }
+    super.afterAll()
+  }
 
   // Helper to convert URI errors to HTTP errors
   private def parseUri(url: String): Eru[HttpError, Uri] =

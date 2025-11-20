@@ -1,22 +1,32 @@
 package net.ghoula.eru.http.client
 
 import munit.FunSuite
+
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
-import net.ghoula.eru.http.server.*
 import net.ghoula.eru.http.client.TestHelpers.*
+import net.ghoula.eru.http.server.*
 
 /** Integration tests for server compression middleware and client automatic decompression.
   *
   * These tests verify the full end-to-end cycle of:
-  * 1. Client sends Accept-Encoding header
-  * 2. Server compresses response with compression middleware
-  * 3. Client automatically decompresses response
-  * 4. Client receives original uncompressed data
+  *   1. Client sends Accept-Encoding header
+  *   2. Server compresses response with compression middleware
+  *   3. Client automatically decompresses response
+  *   4. Client receives original uncompressed data
   */
 class CompressionIntegrationSpec extends FunSuite {
 
   given runtime: EruRuntime = EruRuntime.shared
+
+  override def afterAll(): Unit = {
+    try {
+      EruRuntime.shared.cleanup()
+    } catch {
+      case _: Exception => ()
+    }
+    super.afterAll()
+  }
 
   // Helper to convert URI errors to HTTP errors
   private def parseUri(url: String): Eru[HttpError, Uri] =
@@ -77,7 +87,10 @@ class CompressionIntegrationSpec extends FunSuite {
         for {
           uri <- parseUri(s"http://localhost:${addr.port}/test")
           // Manually add Accept-Encoding since automaticDecompression is false
-          request <- Request.get(uri).headers.add(HeaderNames.AcceptEncoding, "gzip")
+          request <- Request
+            .get(uri)
+            .headers
+            .add(HeaderNames.AcceptEncoding, "gzip")
             .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid header: $e", "RFC 9110")))
             .map(h => Request.get(uri).copy(headers = h))
           response <- client.send(request)

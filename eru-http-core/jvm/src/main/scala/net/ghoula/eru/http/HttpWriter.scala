@@ -272,8 +272,8 @@ object HttpWriter {
 
   /** Write streaming body with chunked transfer encoding.
     *
-    * Uses HTTP/1.1 chunked encoding: each chunk is prefixed with its size in hex,
-    * followed by CRLF, then the chunk data, then CRLF. Final chunk is "0\r\n\r\n".
+    * Uses HTTP/1.1 chunked encoding: each chunk is prefixed with its size in hex, followed by CRLF,
+    * then the chunk data, then CRLF. Final chunk is "0\r\n\r\n".
     */
   private def writeChunkedStream(socket: SocketChannel, chunks: Eru[Nothing, ChunkStream]): Eru[HttpError, Unit] = {
     chunks.flatMap { stream =>
@@ -287,7 +287,7 @@ object HttpWriter {
               writeAll(socket, ByteBuffer.wrap(chunk.bytes.toArray))
               writeAll(socket, ByteBuffer.wrap(CRLF.getBytes(StandardCharsets.UTF_8)))
             }.mapError { case e: Exception => HttpError.NetworkError(s"Error writing chunk: ${e.getMessage}", Some(e)) }
-             .flatMap(_ => writeChunks(nextStream))
+              .flatMap(_ => writeChunks(nextStream))
 
           case Some((_, nextStream)) =>
             // Empty chunk, skip and continue
@@ -297,7 +297,9 @@ object HttpWriter {
             // End of stream - write final chunk
             Eru.effect {
               writeAll(socket, ByteBuffer.wrap(s"0$CRLF$CRLF".getBytes(StandardCharsets.UTF_8)))
-            }.mapError { case e: Exception => HttpError.NetworkError(s"Error writing final chunk: ${e.getMessage}", Some(e)) }
+            }.mapError { case e: Exception =>
+              HttpError.NetworkError(s"Error writing final chunk: ${e.getMessage}", Some(e))
+            }
         }
       }
       writeChunks(stream)
@@ -308,7 +310,11 @@ object HttpWriter {
     *
     * Pulls chunks and writes them directly until the specified length is reached.
     */
-  private def writeStreamWithLength(socket: SocketChannel, chunks: Eru[Nothing, ChunkStream], length: Long): Eru[HttpError, Unit] = {
+  private def writeStreamWithLength(
+    socket: SocketChannel,
+    chunks: Eru[Nothing, ChunkStream],
+    length: Long
+  ): Eru[HttpError, Unit] = {
     chunks.flatMap { stream =>
       def writeChunks(s: ChunkStream, bytesWritten: Long): Eru[HttpError, Unit] = {
         if bytesWritten >= length then Eru.unit
@@ -319,8 +325,10 @@ object HttpWriter {
               Eru.effect {
                 val data = if toWrite == chunk.size then chunk.bytes.toArray else chunk.bytes.toArray.take(toWrite)
                 writeAll(socket, ByteBuffer.wrap(data))
-              }.mapError { case e: Exception => HttpError.NetworkError(s"Error writing chunk: ${e.getMessage}", Some(e)) }
-               .flatMap(_ => writeChunks(nextStream, bytesWritten + toWrite))
+              }.mapError { case e: Exception =>
+                HttpError.NetworkError(s"Error writing chunk: ${e.getMessage}", Some(e))
+              }
+                .flatMap(_ => writeChunks(nextStream, bytesWritten + toWrite))
 
             case Some((_, nextStream)) =>
               // Empty chunk, skip and continue
@@ -330,8 +338,7 @@ object HttpWriter {
               // Stream exhausted - check if we wrote enough
               if bytesWritten < length then
                 Eru.fail(HttpError.NetworkError(s"Stream exhausted after $bytesWritten bytes, expected $length", None))
-              else
-                Eru.unit
+              else Eru.unit
           }
         }
       }

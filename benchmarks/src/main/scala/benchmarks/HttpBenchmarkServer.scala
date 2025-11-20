@@ -71,17 +71,17 @@ object HttpBenchmarkServer {
           // Split into 8KB chunks to avoid buffering entire response
           val chunkSize = 8192
           val totalSize = 102400
-          val numChunks = totalSize / chunkSize  // 12.5, so 13 chunks
+          val numChunks = totalSize / chunkSize // 12.5, so 13 chunks
 
           // Create an iterator of chunks
-          val chunks = Iterator.tabulate(numChunks + 1) { i =>
-            val remainingBytes = totalSize - (i * chunkSize)
-            val thisChunkSize = math.min(chunkSize, remainingBytes)
-            if thisChunkSize > 0 then
-              Chunk.fromString("x" * thisChunkSize)
-            else
-              Chunk.empty
-          }.filter(_.nonEmpty)
+          val chunks = Iterator
+            .tabulate(numChunks + 1) { i =>
+              val remainingBytes = totalSize - (i * chunkSize)
+              val thisChunkSize = math.min(chunkSize, remainingBytes)
+              if thisChunkSize > 0 then Chunk.fromString("x" * thisChunkSize)
+              else Chunk.empty
+            }
+            .filter(_.nonEmpty)
 
           Eru.succeed(
             Response(
@@ -89,7 +89,7 @@ object HttpBenchmarkServer {
               headers = Headers.empty,
               body = Body.Stream(
                 chunks = Eru.succeed(ChunkStream.fromIterator(chunks)),
-                contentLength = None  // Use chunked encoding
+                contentLength = None // Use chunked encoding
               )
             )
           )

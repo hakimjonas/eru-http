@@ -4,14 +4,23 @@ import munit.{FunSuite, Location}
 
 import java.time.Instant
 import java.time.temporal.ChronoUnit
-import java.util.concurrent.{CountDownLatch, Executors}
-import scala.concurrent.duration.*
-import scala.concurrent.{Await, ExecutionContext, Future}
 
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
+import net.ghoula.eru.prelude.*
 
 class CookieJarSpec extends FunSuite {
+
+  given runtime: EruRuntime = EruRuntime.shared
+
+  override def afterAll(): Unit = {
+    try {
+      EruRuntime.shared.cleanup()
+    } catch {
+      case _: Exception => ()
+    }
+    super.afterAll()
+  }
 
   // Test helpers
   extension [E, A](eru: Eru[E, A]) {
@@ -309,85 +318,65 @@ class CookieJarSpec extends FunSuite {
     assertEquals(cookies2.length, 0)
   }
 
-  // ===== Thread Safety Tests =====
+  // ===== Concurrency Tests (using Eru's effect system) =====
 
   test("CookieJar - concurrent add operations") {
-    val jar = CookieJar.inMemory.assertSuccess
-    val uri = Uri.parse("http://example.com/").assertSuccess
+    val program = for {
+      jar <- CookieJar.inMemory
+      uri <- Uri.parse("http://example.com/").mapError(e => HttpError.InvalidRequest(InvalidRequest(e.reason, e.rfc)))
 
-    val numThreads = 10
-    val cookiesPerThread = 100
+      // Create 100 concurrent add operations using parTraverse
+      fibers = (0 until 100).map { i =>
+        jar.add(uri, Cookie(s"cookie-$i", s"value-$i"))
+      }.toList
 
-    val executor = Executors.newFixedThreadPool(numThreads)
-    given ExecutionContext = ExecutionContext.fromExecutor(executor)
+      _ <- parSequence(fibers)
 
-    try {
-      val latch = new CountDownLatch(numThreads)
-
-      val futures = (0 `until` numThreads).map { threadId =>
-        Future {
-          (0 `until` cookiesPerThread).foreach { cookieId =>
-            val cookie = Cookie(s"cookie-$threadId-$cookieId", s"value-$threadId-$cookieId")
-            jar.add(uri, cookie).assertSuccess
-          }
-          latch.countDown()
-        }
+      cookies <- jar.getCookies(uri)
+    } yield {
+      assertEquals(cookies.length, 100)
+      // Verify all cookies are present
+      (0 until 100).foreach { i =>
+        assert(cookies.exists(_.name == s"cookie-$i"))
       }
-
-      // Wait for all threads to complete
-      Await.result(Future.sequence(futures), 10.seconds)
-
-      val cookies = jar.getCookies(uri).assertSuccess
-      assertEquals(cookies.length, numThreads * cookiesPerThread)
-    } finally {
-      executor.shutdown()
     }
+
+    program.assertSuccess
   }
 
   test("CookieJar - concurrent add and get operations") {
-    val jar = CookieJar.inMemory.assertSuccess
-    val uri = Uri.parse("http://example.com/").assertSuccess
+    val program = for {
+      jar <- CookieJar.inMemory
+      uri <- Uri.parse("http://example.com/").mapError(e => HttpError.InvalidRequest(InvalidRequest(e.reason, e.rfc)))
 
-    val numWriters = 5
-    val numReaders = 5
-    val numOperations = 100
-
-    val executor = Executors.newFixedThreadPool(numWriters + numReaders)
-    given ExecutionContext = ExecutionContext.fromExecutor(executor)
-
-    try {
-      val latch = new CountDownLatch(numWriters + numReaders)
-
-      // Writers
-      val writerFutures = (0 `until` numWriters).map { writerId =>
-        Future {
-          (0 `until` numOperations).foreach { i =>
-            val cookie = Cookie(s"cookie-$writerId", s"value-$i")
-            jar.add(uri, cookie).assertSuccess
-          }
-          latch.countDown()
+      // Create 5 writer fibers that add cookies
+      writers = (0 until 5).map { writerId =>
+        Eru.foreach((0 until 20).toList) { i =>
+          jar.add(uri, Cookie(s"cookie-$writerId", s"value-$i"))
         }
-      }
+      }.toList
 
-      // Readers
-      val readerFutures = (0 `until` numReaders).map { _ =>
-        Future {
-          (0 `until` numOperations).foreach { _ =>
-            jar.getCookies(uri).assertSuccess
-          }
-          latch.countDown()
+      // Create 5 reader fibers that read cookies
+      readers = (0 until 5).map { _ =>
+        Eru.foreach((0 until 20).toList) { _ =>
+          jar.getCookies(uri)
         }
-      }
+      }.toList
 
-      // Wait for all threads to complete
-      Await.result(Future.sequence(writerFutures ++ readerFutures), 10.seconds)
+      // Run all writers and readers concurrently
+      _ <- parSequence(writers ++ readers)
 
       // Verify final state
-      val cookies = jar.getCookies(uri).assertSuccess
-      assertEquals(cookies.length, numWriters)
-    } finally {
-      executor.shutdown()
+      cookies <- jar.getCookies(uri)
+    } yield {
+      // Should have 5 cookies (one per writer, since same name overwrites)
+      assertEquals(cookies.length, 5)
+      (0 until 5).foreach { writerId =>
+        assert(cookies.exists(_.name == s"cookie-$writerId"))
+      }
     }
+
+    program.assertSuccess
   }
 
   // ===== Edge Cases =====

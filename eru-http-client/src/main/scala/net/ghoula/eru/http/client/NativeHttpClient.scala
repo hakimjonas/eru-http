@@ -299,48 +299,63 @@ private[client] final class NativeHttpClient(
 
               case Body.Text(text, mediaType, charset) =>
                 val bytes = Bytes.fromString(text, charset)
-                Compression.decompress(bytes, enc).flatMap { decompressed =>
-                  val decompressedText = decompressed.asString(charset)
-                  val headersWithoutEncoding = response.headers.remove(HeaderNames.ContentEncoding)
-                  Eru.succeed(response.copy(
-                    headers = headersWithoutEncoding,
-                    body = Body.Text(decompressedText, mediaType, charset)
-                  ))
-                }.mapError(e => HttpError.NetworkError(s"Decompression failed: ${e.message}", None))
+                Compression
+                  .decompress(bytes, enc)
+                  .flatMap { decompressed =>
+                    val decompressedText = decompressed.asString(charset)
+                    val headersWithoutEncoding = response.headers.remove(HeaderNames.ContentEncoding)
+                    Eru.succeed(
+                      response.copy(
+                        headers = headersWithoutEncoding,
+                        body = Body.Text(decompressedText, mediaType, charset)
+                      )
+                    )
+                  }
+                  .mapError(e => HttpError.NetworkError(s"Decompression failed: ${e.message}", None))
 
               case Body.Binary(bytes, mediaType) =>
-                Compression.decompress(bytes, enc).flatMap { decompressed =>
-                  val headersWithoutEncoding = response.headers.remove(HeaderNames.ContentEncoding)
-                  // Update Content-Length if present
-                  val updatedHeaders = response.headers.getFirst(HeaderNames.ContentLength) match {
-                    case Some(_) =>
-                      headersWithoutEncoding
-                        .add(HeaderNames.ContentLength, decompressed.length.toString)
-                        .attempt
-                        .unsafeRunSync() match {
+                Compression
+                  .decompress(bytes, enc)
+                  .flatMap { decompressed =>
+                    val headersWithoutEncoding = response.headers.remove(HeaderNames.ContentEncoding)
+                    // Update Content-Length if present
+                    val updatedHeaders = response.headers.getFirst(HeaderNames.ContentLength) match {
+                      case Some(_) =>
+                        headersWithoutEncoding
+                          .add(HeaderNames.ContentLength, decompressed.length.toString)
+                          .attempt
+                          .unsafeRunSync() match {
                           case Result.Success(h) => h
                           case Result.Failure(_) => headersWithoutEncoding
                         }
-                    case None => headersWithoutEncoding
+                      case None => headersWithoutEncoding
+                    }
+                    Eru.succeed(
+                      response.copy(
+                        headers = updatedHeaders,
+                        body = Body.Binary(decompressed, mediaType)
+                      )
+                    )
                   }
-                  Eru.succeed(response.copy(
-                    headers = updatedHeaders,
-                    body = Body.Binary(decompressed, mediaType)
-                  ))
-                }.mapError(e => HttpError.NetworkError(s"Decompression failed: ${e.message}", None))
+                  .mapError(e => HttpError.NetworkError(s"Decompression failed: ${e.message}", None))
 
               case Body.Stream(chunks, _, mediaType) =>
                 // Decompress streaming body chunk-by-chunk
                 chunks.flatMap { stream =>
-                  Compression.decompressStream(stream, enc).flatMap { decompressedStream =>
-                    val headersWithoutEncoding = response.headers.remove(HeaderNames.ContentEncoding)
-                    // Remove Content-Length since it's now unknown
-                    val updatedHeaders = headersWithoutEncoding.remove(HeaderNames.ContentLength)
-                    Eru.succeed(response.copy(
-                      headers = updatedHeaders,
-                      body = Body.Stream(Eru.succeed(decompressedStream), None, mediaType)
-                    ))
-                  }.mapError(e => HttpError.NetworkError(s"Decompression failed: ${e.message}", None))
+                  Compression
+                    .decompressStream(stream, enc)
+                    .flatMap { decompressedStream =>
+                      val headersWithoutEncoding = response.headers.remove(HeaderNames.ContentEncoding)
+                      // Remove Content-Length since it's now unknown
+                      val updatedHeaders = headersWithoutEncoding.remove(HeaderNames.ContentLength)
+                      Eru.succeed(
+                        response.copy(
+                          headers = updatedHeaders,
+                          body = Body.Stream(Eru.succeed(decompressedStream), None, mediaType)
+                        )
+                      )
+                    }
+                    .mapError(e => HttpError.NetworkError(s"Decompression failed: ${e.message}", None))
                 }.mapError(e => HttpError.NetworkError(e.toString, None))
             }
 
@@ -436,7 +451,8 @@ private[client] final class NativeHttpClient(
     }
   }
 
-  /** Add Accept-Encoding header if automatic decompression is enabled and header not already present
+  /** Add Accept-Encoding header if automatic decompression is enabled and header not already
+    * present
     */
   private def addAcceptEncodingIfNeeded[A](request: Request[A]): Eru[HttpError, Request[A]] = {
     if !config.automaticDecompression || request.headers.contains(HeaderNames.AcceptEncoding) then {
