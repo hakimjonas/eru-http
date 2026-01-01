@@ -20,29 +20,37 @@ import net.ghoula.eru.prelude.*
   *   - Structured concurrency ensures automatic cleanup
   *   - Simple, readable code with no event loops or callbacks
   *
+  * SO_REUSEPORT Support (Linux 3.9+):
+  *   - Multiple acceptor threads for multi-core scaling
+  *   - Kernel-level load balancing across acceptors
+  *   - Each acceptor has its own ServerSocketChannel + Selector
+  *   - Enabled automatically when acceptorThreads > 1
+  *
   * Compare to NettyHttpServer: ~150 lines vs 332 lines (55% reduction)
   */
 private[server] final class NativeHttpServer(
   config: HttpServerConfig,
   handler: RequestHandler,
-  serverSocket: ServerSocketChannel,
+  serverSockets: List[ServerSocketChannel],
   sslContext: Option[SSLContext]
-)(using runtime: EruRuntime)
+)(using @unused runtime: EruRuntime)
     extends HttpServer {
 
   private val running = new AtomicBoolean(true)
-
-  // Track active client sockets so we can close them during shutdown
   private val activeClients = new java.util.concurrent.ConcurrentHashMap[SocketChannel, java.lang.Boolean]()
 
   def start: Eru[HttpError, ServerAddress] = for {
+    // Bind all server sockets
     _ <- Eru.effect {
-      serverSocket.configureBlocking(true) // Blocking is GOOD on Virtual Threads!
-      serverSocket.bind(new InetSocketAddress(config.host, config.port), config.backlog)
+      serverSockets.foreach { socket =>
+        socket.configureBlocking(false) // Non-blocking for Selector-based accept
+        socket.bind(new InetSocketAddress(config.host, config.port), config.backlog)
+      }
     }.mapError(e => HttpError.NetworkError(s"Failed to bind server: ${e.getMessage}", Some(e)))
 
+    // Get address from first socket (all bound to same port)
     address <- Eru.effect {
-      serverSocket.getLocalAddress match {
+      serverSockets.head.getLocalAddress match {
         case addr: InetSocketAddress =>
           ServerAddress(addr.getHostString, addr.getPort)
         case other =>
@@ -50,50 +58,79 @@ private[server] final class NativeHttpServer(
       }
     }.mapError(e => HttpError.NetworkError(s"Failed to get address: ${e.getMessage}", Some(e)))
 
-    // Start accept loop on its own Virtual Thread as daemon (no tracking)
-    // Use forkDaemon to prevent rootFibers accumulation in long-running server
-    _ <- acceptLoop.forkDaemon
+    // Start one accept loop per server socket (SO_REUSEPORT multi-threading)
+    // Use Thread.startVirtualThread directly to bypass Eru's effect system
+    // This ensures each accept loop runs on its own Virtual Thread immediately
+    _ <- Eru.effect {
+      serverSockets.foreach { socket =>
+        Thread.startVirtualThread(() => acceptLoop(socket).unsafeRunSync())
+      }
+    }.mapError(e => HttpError.NetworkError(s"Failed to start accept loops: ${e.getMessage}", Some(e)))
 
   } yield address
 
-  /** Accept loop - runs forever accepting connections.
+  /** Accept loop - uses Selector for efficient non-blocking accept.
     *
-    * Each accept() blocks on a Virtual Thread, which is efficient! Each accepted connection is
-    * handled on its own Virtual Thread via .fork within Eru's structured concurrency.
+    * Uses NIO Selector to wait for incoming connections efficiently, then dispatches
+    * each connection to its own Virtual Thread for handling. This avoids blocking
+    * on accept() and allows handling thousands of concurrent connection attempts.
+    *
+    * With SO_REUSEPORT (acceptorThreads > 1), multiple instances of this loop run
+    * concurrently, each with its own ServerSocketChannel bound to the same port.
+    * The kernel distributes incoming connections across acceptors for multi-core scaling.
+    *
+    * @param serverSocket The server socket for this accept loop (unique per acceptor thread)
     */
-  private def acceptLoop: Eru[HttpError, Unit] = {
-    val acceptAndHandle = for {
-      // Accept connection (blocks on Virtual Thread - efficient!)
-      clientSocket <- Eru
-        .effect(serverSocket.accept())
-        .mapError(e => HttpError.NetworkError(s"Accept error: ${e.getMessage}", Some(e)))
+  private def acceptLoop(serverSocket: ServerSocketChannel): Eru[HttpError, Unit] = {
+    Eru.effect {
+      val selector = java.nio.channels.Selector.open()
+      serverSocket.register(selector, java.nio.channels.SelectionKey.OP_ACCEPT)
 
-      // Configure socket
-      _ <- Eru.effect {
-        clientSocket.configureBlocking(true) // Client socket also uses blocking mode
+      while running.get() do {
+        // Wait for events (blocks efficiently in kernel)
+        selector.select()
 
-        // Enable TCP_NODELAY to disable Nagle's algorithm (avoid 40ms delay)
-        clientSocket.setOption(java.net.StandardSocketOptions.TCP_NODELAY, java.lang.Boolean.TRUE)
+        // Process all ready keys
+        val keys = selector.selectedKeys().iterator()
+        while keys.hasNext() do {
+          val key = keys.next()
+          keys.remove()
 
-        // Enable TCP_QUICKACK on Linux to avoid delayed ACK (avoid 40ms delay)
-        try {
-          clientSocket.setOption(ExtendedSocketOptions.TCP_QUICKACK, true)
-        } catch {
-          case _: Exception => () // TCP_QUICKACK not available on this platform
+          if key.isAcceptable() then {
+            // Accept all pending connections
+            var clientSocket = serverSocket.accept()
+            while clientSocket != null do {
+              // Configure socket
+              clientSocket.configureBlocking(true) // Client socket uses blocking mode on VT
+
+              // Enable TCP_NODELAY to disable Nagle's algorithm (avoid 40ms delay)
+              clientSocket.setOption(java.net.StandardSocketOptions.TCP_NODELAY, java.lang.Boolean.TRUE)
+
+              // Enable TCP_QUICKACK on Linux to avoid delayed ACK (avoid 40ms delay)
+              try {
+                clientSocket.setOption(ExtendedSocketOptions.TCP_QUICKACK, true)
+              } catch {
+                case _: Exception => () // TCP_QUICKACK not available on this platform
+              }
+
+              // Track active client for graceful shutdown
+              activeClients.put(clientSocket, java.lang.Boolean.TRUE)
+
+              // Dispatch to Virtual Thread immediately WITHOUT BLOCKING
+              // We're in a sync effect block, so start the VT directly
+              // This allows the accept loop to continue immediately
+              val socket = clientSocket // Capture for closure
+              Thread.startVirtualThread(() => handleClient(socket).unsafeRunSync())
+
+              // Try to accept next pending connection (returns null if none)
+              clientSocket = serverSocket.accept()
+            }
+          }
         }
-      }.mapError(e => HttpError.NetworkError(s"Socket config error: ${e.getMessage}", Some(e)))
+      }
 
-      // Fork handler fiber for each connection as daemon (no tracking)
-      // Virtual Threads scale well, so we fork without artificial limiting
-      // Each connection runs on its own VT (~10KB memory vs 2MB OS thread)
-      // Use forkDaemon to prevent rootFibers accumulation in long-running server
-      _ <- handleClient(clientSocket).forkDaemon
-
-    } yield ()
-
-    // Run accept-and-handle loop forever
-    // Errors will bubble up and stop the server gracefully
-    Eru.forever(acceptAndHandle)
+      selector.close()
+    }.mapError(e => HttpError.NetworkError(s"Accept loop error: ${e.getMessage}", Some(e)))
   }
 
   /** Handle a single client connection.
@@ -102,9 +139,6 @@ private[server] final class NativeHttpServer(
     * cycle is a simple for-comprehension!
     */
   private def handleClient(socket: SocketChannel): Eru[HttpError, Unit] = {
-    // Register this client socket
-    activeClients.put(socket, java.lang.Boolean.TRUE)
-
     val clientEffect = for {
       // Wrap with TLS if configured
       secureSocket <- sslContext match {
@@ -164,9 +198,12 @@ private[server] final class NativeHttpServer(
         handlerResult <- handler(request).attempt
 
         // Convert handler result to response (either success or error response)
-        response = handlerResult match {
-          case Result.Success(resp) => addConnectionHeader(request, resp)
-          case Result.Failure(httpError: HttpError) => addConnectionHeader(request, errorToResponse(httpError))
+        // Add Connection and Content-Length headers
+        response <- Eru.effectTotal {
+          handlerResult match {
+            case Result.Success(resp) => addConnectionHeader(request, resp)
+            case Result.Failure(httpError: HttpError) => addConnectionHeader(request, errorToResponse(httpError))
+          }
         }
 
         // Write response with reusable buffer (zero-allocation, blocking write - efficient on VT!)
@@ -334,27 +371,20 @@ private[server] final class NativeHttpServer(
   def shutdown: Eru[HttpError, Unit] = {
     if running.compareAndSet(true, false) then {
       Eru.effect {
-        // Close server socket to stop accepting new connections
-        serverSocket.close()
+        // Close all server sockets first to stop accepting new connections
+        serverSockets.foreach(_.close())
 
-        // Close all active client connections to interrupt blocked handleClient fibers
-        // This is critical! Without this, daemon fibers remain blocked on socket I/O
-        val clients = activeClients.keys()
-        while clients.hasMoreElements() do {
-          val clientSocket = clients.nextElement()
+        // Close all active client connections
+        val clients = activeClients.keySet().iterator()
+        while clients.hasNext() do {
+          val socket = clients.next()
           try {
-            clientSocket.close()
+            socket.close()
           } catch {
-            case _: Exception => () // Ignore errors closing individual clients
+            case _: Exception => () // Ignore errors closing individual sockets
           }
         }
-
-        // Give daemon fibers a moment to handle socket closure exceptions and exit
-        // Without this delay, daemon Virtual Threads may still be in the process
-        // of shutting down when the next test starts. 100ms is conservative but ensures
-        // all cleanup completes even under heavy concurrent test load.
-        Thread.sleep(100)
-
+        activeClients.clear()
         ()
       }.mapError(e => HttpError.NetworkError(s"Error during shutdown: ${e.getMessage}", Some(e)))
     } else {
@@ -367,6 +397,29 @@ private[server] final class NativeHttpServer(
 
 private[server] object NativeHttpServer {
 
+  /** Try to enable SO_REUSEPORT for multi-threaded accept.
+    *
+    * Returns Some(sockets) if successful, None if SO_REUSEPORT is not supported on this platform.
+    * SO_REUSEPORT is available in StandardSocketOptions since Java 9.
+    */
+  private def tryEnableReusePort(numAcceptors: Int): Option[List[ServerSocketChannel]] = {
+    try {
+      // Create N sockets with SO_REUSEPORT enabled
+      // SO_REUSEPORT is in StandardSocketOptions (not ExtendedSocketOptions!)
+      val sockets = (0 until numAcceptors).map { _ =>
+        val socket = ServerSocketChannel.open()
+        socket.setOption(java.net.StandardSocketOptions.SO_REUSEADDR, java.lang.Boolean.TRUE)
+        socket.setOption(java.net.StandardSocketOptions.SO_REUSEPORT, java.lang.Boolean.TRUE)
+        socket
+      }.toList
+
+      Some(sockets)
+    } catch {
+      case _: UnsupportedOperationException => None  // Platform doesn't support SO_REUSEPORT
+      case _: Exception => None                       // Any other error
+    }
+  }
+
   /** Create a native HTTP server.
     *
     * This is dramatically simpler than NettyHttpServer.create:
@@ -375,21 +428,53 @@ private[server] object NativeHttpServer {
     *   - No ChannelPipeline setup
     *   - No ChannelHandlers
     *   - Just pure Eru effects + blocking NIO
+    *
+    * With acceptorThreads > 1, creates multiple ServerSocketChannels with SO_REUSEPORT
+    * for kernel-level load balancing (Linux 3.9+). Each acceptor runs its own accept loop.
     */
   def create(
     config: HttpServerConfig,
     handler: RequestHandler
   )(using runtime: EruRuntime): Eru[HttpError, HttpServer] = {
     for {
-      serverSocket <- Eru.effect { ServerSocketChannel.open() }
-        .mapError(e => HttpError.NetworkError(s"Failed to create server socket: ${e.getMessage}", Some(e)))
+      // Create N server sockets (one per acceptor thread)
+      // With SO_REUSEPORT, multiple sockets can bind to the same port
+      serverSockets <- Eru.effect {
+        val requestedAcceptors = config.acceptorThreads.max(1)
+
+        // Try to enable SO_REUSEPORT if multiple acceptors requested
+        val (actualAcceptors, sockets) = if requestedAcceptors > 1 then {
+          tryEnableReusePort(requestedAcceptors) match {
+            case Some(socketsWithReusePort) =>
+              (requestedAcceptors, socketsWithReusePort)
+            case None =>
+              // SO_REUSEPORT not available, fall back to single acceptor
+              System.err.println(
+                s"[WARN] SO_REUSEPORT not available on this JDK/platform. " +
+                s"Falling back to single-threaded accept (acceptorThreads=${requestedAcceptors} -> 1). " +
+                s"For best performance on Linux, use a JDK that supports jdk.net.ExtendedSocketOptions.SO_REUSEPORT"
+              )
+              (1, List(ServerSocketChannel.open()))
+          }
+        } else {
+          (1, List(ServerSocketChannel.open()))
+        }
+
+        if actualAcceptors == 1 && requestedAcceptors > 1 then {
+          System.err.println(s"[INFO] Using single-threaded accept loop. CPU scaling will be limited.")
+        } else if actualAcceptors > 1 then {
+          System.err.println(s"[INFO] Using SO_REUSEPORT with ${actualAcceptors} acceptor threads for multi-core scaling")
+        }
+
+        sockets
+      }.mapError(e => HttpError.NetworkError(s"Failed to create server sockets: ${e.getMessage}", Some(e)))
 
       sslContext <- config.tlsConfig match {
         case Some(tlsConfig) => createSSLContext(tlsConfig).map(Some(_))
         case None => Eru.succeed(None)
       }
 
-      server = new NativeHttpServer(config, handler, serverSocket, sslContext)
+      server = new NativeHttpServer(config, handler, serverSockets, sslContext)
 
     } yield server
   }

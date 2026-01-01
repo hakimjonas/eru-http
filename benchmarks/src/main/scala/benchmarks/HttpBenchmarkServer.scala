@@ -14,10 +14,11 @@ object HttpBenchmarkServer {
 
   def main(args: Array[String]): Unit = {
     val port = if args.length > 0 then args(0).toInt else 8080
-    runServer(port)
+    val acceptorThreads = if args.length > 1 then args(1).toInt else Runtime.getRuntime.availableProcessors()
+    runServer(port, acceptorThreads)
   }
 
-  def runServer(port: Int = 8080): Unit = {
+  def runServer(port: Int = 8080, acceptorThreads: Int = Runtime.getRuntime.availableProcessors()): Unit = {
     println("\n=== eru-http Benchmark Server ===\n")
 
     // Shared data for stateful endpoints
@@ -193,7 +194,8 @@ object HttpBenchmarkServer {
       host = "0.0.0.0",
       port = port,
       backlog = 1024,
-      maxConnections = maxConnections
+      maxConnections = maxConnections,
+      acceptorThreads = acceptorThreads
     )
 
     // Wrap handler with compression middleware

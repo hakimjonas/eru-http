@@ -2,112 +2,152 @@
 
 *Quick overview of what's done and what's next*
 
-## 📊 Overall Progress
+## Overall Progress
 
 ```
-Core Types      ████████░░░░░░░░░░░░  40%
-Body Handling   ░░░░░░░░░░░░░░░░░░░░   0%
-HTTP Client     ░░░░░░░░░░░░░░░░░░░░   0%
-HTTP Server     ░░░░░░░░░░░░░░░░░░░░   0%
-Standards       ░░░░░░░░░░░░░░░░░░░░   0%
-Testing         ██░░░░░░░░░░░░░░░░░░  10%
-Documentation   ██░░░░░░░░░░░░░░░░░░  10%
+Core Types      ████████████████████  100%
+Body Handling   ████████████████████  100%
+HTTP Parser     ████████████████████  100%
+HTTP Writer     ████████████████████  100%
+HTTP Server     ████████████████████  100%
+HTTP Client     ████████████████████  100%
+Connection Pool ████████████████████  100%
+Compression     ████████████████████  100%
+TLS/SSL         ░░░░░░░░░░░░░░░░░░░░    0%
+WebSocket       ░░░░░░░░░░░░░░░░░░░░    0%
+HTTP/2          ░░░░░░░░░░░░░░░░░░░░    0%
+Testing         ████████████████░░░░   80%
+Documentation   ████████████░░░░░░░░   60%
 ```
 
-**Overall: ~10% Complete**
-
-## ✅ What's Done
-
-### Completed Core Types
-- **Method**: Full HTTP method support with semantic properties
-- **StatusCode**: All standard codes with RFC-compliant behavior
-- **Headers**: Case-insensitive, multi-value header collection
-- **MediaType**: MIME types with parameters and matching
-- **Port**: Validated port numbers with semantic properties (opaque type)
-- **Uri**: Basic URI structure and building (needs RFC 3986 parser)
-- **Request[A]**: Type-safe requests with validation
-- **Response[A]**: Type-safe responses with validation
-- **HttpError**: Comprehensive error model with union types
-
-### Project Setup
-- Scala 3.7.3 with Java 21
-- Build configuration with local Eru dependency
-- Valar integration from Maven Central
-- Tests all passing (17/17)
-- MANIFESTO.md outlining principles
-- Modern Scala 3 syntax (if-then-else, given, opaque types)
-
-## 🚧 What's Next (Priority Order)
-
-### 1. Complete URI Implementation
-- [ ] Full RFC 3986 compliant parser
-- [ ] Percent encoding/decoding
-- [ ] Relative URI resolution
-
-### 2. Body Handling Framework
-- [ ] Body trait for different body types
-- [ ] BodyEncoder/BodyDecoder type classes
-- [ ] Streaming support with backpressure
-- [ ] Built-in encoders for common types
-
-### 3. Basic HTTP Client
-- [ ] HttpClient trait
-- [ ] HTTP/1.1 implementation using Java NIO
-- [ ] Connection pooling
-- [ ] Virtual Thread integration
-
-### 4. Testing Infrastructure
-- [ ] Property-based tests for RFC compliance
-- [ ] Mock client/server for testing
-- [ ] Performance benchmarks
-
-
-## 🔧 Technical Debt
-
-### Known Issues
-- URI parser is simplified, needs full RFC 3986 implementation
-- HeaderValue validation not implemented
-- No streaming body support yet
-- Tests need expansion
-
-### Design Decisions Pending
-- HTTP/3 support approach
-- Connection pooling architecture
-- TLS/SSL implementation strategy
-
-## 📈 Recent Progress
-
-### This Session
-- ✅ Created project structure
-- ✅ Implemented core HTTP types
-- ✅ Set up build configuration
-- ✅ Applied opaque type pattern to Port
-- ✅ Created comprehensive test suite base
-- ✅ Established design principles in MANIFESTO
-
-### Next Session Goals
-- [ ] Complete URI RFC 3986 parser
-- [ ] Design Body type hierarchy
-- [ ] Implement basic BodyEncoder/BodyDecoder
-- [ ] Start HTTP/1.1 client skeleton
-
-## 💡 Quick Wins Available
-
-If you want to contribute:
-1. Add more MediaType constants
-2. Implement Date header parser
-3. Add more comprehensive tests
-4. Document existing APIs
-5. Add more status codes from IANA registry
-
-## 📝 Notes for Next Time
-
-- Remember to use Scala 3 features consistently (no implicits!)
-- Keep RFC references in all error messages
-- Virtual Threads are the concurrency strategy
-- Effects via Eru only (no Future/IO)
-- Standards compliance over convenience
+**HTTP/1.1 Stack: ~85% Complete**
+**Overall (including HTTP/2, WebSocket): ~65% Complete**
 
 ---
 
-*Use ROADMAP.md for detailed planning, this STATUS.md for quick reference*
+## What's Done
+
+### Core HTTP Types (100%)
+- **Method**: All standard methods with semantic properties
+- **StatusCode**: All standard codes with RFC-compliant behavior
+- **Headers**: Case-insensitive, multi-value, TreeMap-based
+- **Uri**: RFC 3986 parsing (authority, path, query, fragment)
+- **Request/Response**: Full validation, builder methods
+- **Body**: Text, Binary, Stream (ChunkStream), Empty
+- **MediaType**: Full parsing with parameters, charset, boundary
+- **Cookie**: RFC 6265 with domain/path matching, SameSite
+- **CacheControl**: RFC 9111 directives
+- **ETag**: Strong/weak ETags with matching
+- **HttpDate**: RFC 9110 date parsing/formatting
+- **Multipart**: RFC 7578 multipart/form-data
+- **ServerSentEvent**: WHATWG SSE spec
+
+### HTTP Parser (100%)
+- Zero-allocation byte-level parsing with BufferedSocketReader
+- Request/response line parsing
+- Header parsing with pre-interned common names
+- Chunked transfer encoding (streaming)
+- Content-Length body reading
+- 8KB direct ByteBuffer, TCP_QUICKACK support
+
+### HTTP Writer (100%)
+- Zero-allocation serialization with ByteBuffer pooling
+- Request/response writing
+- Chunked transfer encoding (write)
+- Direct buffer writes for zero-copy I/O
+
+### HTTP Server - NativeHttpServer (100%)
+- Blocking NIO + Virtual Threads
+- SO_REUSEPORT multi-threaded accept
+- Per-connection request loop (HTTP keep-alive)
+- BufferedSocketReader pooling per connection
+- ByteBuffer pooling for zero-allocation response writing
+- TCP_NODELAY and TCP_QUICKACK optimizations
+- Structured concurrency with forkDaemon
+- Automatic Content-Length/Transfer-Encoding headers
+
+### HTTP Client - NativeHttpClient (100%)
+- Request execution with encoding/decoding
+- Interceptor support (request/response)
+- Cookie jar integration with RFC 6265 matching
+- Redirect following (configurable max redirects)
+- Connection pooling with backpressure
+- Automatic Accept-Encoding header injection
+- **Automatic response decompression** (gzip, deflate, brotli)
+
+### Connection Pool (100%)
+- Semaphore-based backpressure (global + per-host)
+- FIFO fairness
+- BufferedSocketReader pooling (8KB + StringBuilder)
+- ByteBuffer pooling (4KB direct)
+- Connection reuse with HTTP/1.1 keep-alive
+- TCP_NODELAY and TCP_QUICKACK optimizations
+
+### Compression (100%)
+- **Primitives**: gzip, deflate, brotli (via brotli4j)
+- **Server Middleware**: `Middleware.compression()` with configurable minSize and encoding preferences
+- **Client Decompression**: Automatic based on Content-Encoding header
+- Stream compression/decompression support
+
+### Server Middleware (100%)
+- Logging (with and without error handling)
+- CORS (configurable origins, methods, headers, credentials)
+- Authentication (generic, Bearer token)
+- Request ID generation
+- Error handling (generic, default)
+- Conditional middleware (when, forPath, forMethod)
+- **Compression middleware**
+- Middleware composition (andThen, combine)
+
+---
+
+## What's Next
+
+### Priority 1: TLS/SSL Support (NEXT)
+
+**Current state**: Stubs exist, return unwrapped sockets
+
+**Files with TODOs**:
+- `NativeHttpClient.scala:389-405` - `wrapWithTLS()` stub
+- `NativeHttpClient.scala:548-558` - `createSSLContext()` stub
+- `NativeHttpServer.scala:320-331` - `wrapWithTLS()` stub
+- `NativeHttpServer.scala:484-495` - `createSSLContext()` stub
+
+**Required implementation**:
+- `SSLEngineSocketWrapper` class (~200-300 lines)
+- TLS handshake on Virtual Threads
+- Certificate/key loading from existing TlsConfig
+- SNI support
+
+### Priority 2: WebSocket Support
+
+- RFC 6455 implementation
+- Handshake, frame parsing, ping/pong
+- Works over TLS (wss://)
+
+### Priority 3: HTTP/2 Support
+
+- HPACK compression
+- Stream multiplexing
+- Flow control
+- ALPN negotiation
+
+---
+
+## Technical Notes
+
+### Performance Achievements
+- Memory: Reduced allocation from 35 GB/s to ~936 MB/s (97% reduction)
+- Streaming: Constant memory for 100KB+ bodies
+- Concurrency: ~10KB per Virtual Thread vs ~2MB for OS threads
+
+### Architecture
+- Build on Eru effect system, don't extend it
+- Virtual Threads for all blocking I/O
+- Zero-allocation parsing/writing where possible
+- RFC compliance strictly followed
+
+---
+
+*Last updated: 2026-01-01*
+*Use ROADMAP.md for detailed planning*

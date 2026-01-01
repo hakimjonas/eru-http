@@ -34,15 +34,14 @@ ThisBuild / scalacOptions ++= Seq(
   "-indent",
   "-new-syntax",
   "-no-indent",
-  "-source:future"
+  "-source:future",
+  "-release:21" // Target Java 21+ for Virtual Threads support
 )
 
-// Java options
+// Java options - target Java 21 for Virtual Threads support
 ThisBuild / javacOptions ++= Seq(
-  "-source",
-  "25",
-  "-target",
-  "25"
+  "--release",
+  "21"
 )
 
 // Test settings

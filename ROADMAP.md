@@ -2,10 +2,10 @@
 
 *Building world-class HTTP infrastructure on Eru - from the ground up*
 
-## Project Status: 🟢 Core Infrastructure Complete
+## Project Status: 🟢 HTTP/1.1 Complete, TLS Next
 
 **Current Version**: 0.0.1-SNAPSHOT
-**Progress**: HTTP/1.1 stack production-ready, enterprise enablers in progress
+**Progress**: HTTP/1.1 stack complete with compression, TLS implementation next
 
 ---
 
@@ -88,94 +88,83 @@
 
 ---
 
+## ✅ Completed Enterprise Enablers
+
+### Compression Middleware ✅
+
+**Completed**: Full implementation in `Middleware.scala:356-467`
+
+- ✅ Inspects `Accept-Encoding` request header
+- ✅ Compresses response body (gzip, deflate, brotli)
+- ✅ Adds `Content-Encoding` response header
+- ✅ Skips already-compressed content
+- ✅ Handles Text, Binary, and Stream bodies
+- ✅ Configurable minSize threshold and encoding preferences
+- ✅ `CompressionConfig` with default, aggressive, conservative presets
+
+**Test Coverage**: `MiddlewareSpec.scala` (compression tests), `CompressionSpec.scala`
+
+---
+
+### Client Decompression ✅
+
+**Completed**: Full implementation in `NativeHttpClient.scala:278-366`
+
+- ✅ Inspects `Content-Encoding` response header
+- ✅ Decompresses gzip, deflate, brotli automatically
+- ✅ Removes `Content-Encoding` header after decompression
+- ✅ Updates `Content-Length` appropriately
+- ✅ Handles streaming responses
+- ✅ Configurable via `HttpClientConfig.automaticDecompression`
+- ✅ Adds `Accept-Encoding` header automatically when enabled
+
+**Test Coverage**: `CompressionIntegrationSpec.scala` (end-to-end tests)
+
+---
+
 ## 🎯 Next: Enterprise Enablers (Priority Order)
 
-### Priority 1: Compression Middleware (NEXT) 🔄
-
-**Goal**: Wire up Compression.scala into server response pipeline
-
-**Why first**:
-- Low complexity, high value
-- Immediate performance improvement
-- Good practice for middleware pattern
-- Builds on existing Compression.scala
-
-**Requirements**:
-- Inspect `Accept-Encoding` request header
-- Compress response body based on client preferences (gzip, deflate, brotli)
-- Add `Content-Encoding` response header
-- Handle already-compressed content (no double-compression)
-- Preserve streaming (compress chunks, not entire body)
-- Configurable compression level and min size threshold
-
-**Acceptance Criteria**:
-- ✅ Server compresses responses when client sends `Accept-Encoding: gzip`
-- ✅ Small responses (<1KB) not compressed by default
-- ✅ Streaming responses compressed chunk-by-chunk
-- ✅ Benchmark shows bandwidth reduction with minimal CPU overhead
-
----
-
-### Priority 2: Client Decompression 📋
-
-**Goal**: Automatic response decompression in HTTP client
-
-**Why second**:
-- Low complexity, completes compression story
-- Makes client transparent to use
-- Natural follow-up to server compression
-- Config flag `automaticDecompression` already exists
-
-**Requirements**:
-- Inspect `Content-Encoding` response header
-- Decompress based on encoding (gzip, deflate, brotli)
-- Remove `Content-Encoding` header after decompression
-- Update `Content-Length` if present
-- Handle streaming responses (decompress chunks)
-- Configurable via HttpClientConfig
-
-**Acceptance Criteria**:
-- ✅ Client automatically decompresses gzip/deflate/brotli responses
-- ✅ `automaticDecompression = false` disables feature
-- ✅ Streaming responses decompressed incrementally
-- ✅ Errors propagate correctly (corrupt compression data)
-
----
-
-### Priority 3: TLS/SSL Support 📋
+### Priority 1: TLS/SSL Support (NEXT) 🔄
 
 **Goal**: HTTPS for both client and server
 
-**Why third**:
+**Why now**:
 - Critical blocker for production use
 - Required foundation for WebSocket/HTTP/2
 - Medium complexity (Java SSLEngine API)
 - Enables secure communication
 
+**Current state**: Stubs exist that return unwrapped sockets
+- `NativeHttpClient.scala:389-405` - `wrapWithTLS()` TODO
+- `NativeHttpClient.scala:548-558` - `createSSLContext()` TODO
+- `NativeHttpServer.scala:320-331` - `wrapWithTLS()` TODO
+- `NativeHttpServer.scala:484-495` - `createSSLContext()` TODO
+
 **Requirements**:
+- Create `SSLEngineSocketWrapper` class (~200-300 lines)
 - Implement `wrapWithTLS()` in NativeHttpServer
-- Implement `wrapWithTLS()` in ConnectionPool (client)
+- Implement `wrapWithTLS()` in NativeHttpClient
 - SSLEngine integration with blocking NIO
 - TLS handshake on Virtual Threads (blocking is fine)
-- Certificate/key loading from TlsConfig
+- Certificate/key loading from existing TlsConfig
 - Support TLS 1.2 and 1.3
 - Proper error handling for SSL errors
 - SNI support (Server Name Indication)
 
 **Acceptance Criteria**:
-- ✅ Server accepts HTTPS connections
-- ✅ Client makes HTTPS requests
-- ✅ Certificate validation works
-- ✅ Self-signed certs work in dev (with config flag)
-- ✅ Performance comparable to HTTP (TLS overhead only)
+- ☐ Server accepts HTTPS connections
+- ☐ Client makes HTTPS requests
+- ☐ Certificate validation works
+- ☐ Self-signed certs work in dev (with `TlsConfig.insecure`)
+- ☐ Performance comparable to HTTP (TLS overhead only)
 
 ---
 
-### Priority 4: WebSocket Support 📋
+### Priority 2: WebSocket Support 📋
 
 **Goal**: Real-time bidirectional communication via WebSocket
 
-**Why fourth**:
+**Why second**:
 - High enterprise value
 - Builds on TLS foundation
 - Medium complexity (RFC 6455)
@@ -191,20 +180,20 @@
 - Backpressure handling with Eru effects
 
 **Acceptance Criteria**:
-- ✅ Client connects to WebSocket server
-- ✅ Server accepts WebSocket upgrade
-- ✅ Bidirectional text/binary messages
-- ✅ Ping/pong keeps connection alive
-- ✅ Graceful close handshake
-- ✅ Works over TLS (wss://)
+- ☐ Client connects to WebSocket server
+- ☐ Server accepts WebSocket upgrade
+- ☐ Bidirectional text/binary messages
+- ☐ Ping/pong keeps connection alive
+- ☐ Graceful close handshake
+- ☐ Works over TLS (wss://)
 
 ---
 
-### Priority 5: HTTP/2 Support 📋
+### Priority 3: HTTP/2 Support 📋
 
 **Goal**: Modern protocol with multiplexing
 
-**Why last**:
+**Why third**:
 - High complexity (HPACK, streams, flow control)
 - Less critical than WebSocket for many use cases
 - Can be deferred until other enablers complete
@@ -220,12 +209,12 @@
 - Upgrade from HTTP/1.1 (h2c)
 
 **Acceptance Criteria**:
-- ✅ Client negotiates HTTP/2 via ALPN
-- ✅ Server accepts HTTP/2 connections
-- ✅ Multiple concurrent streams per connection
-- ✅ HPACK reduces header overhead
-- ✅ Flow control prevents overwhelming
-- ✅ Performance improvement over HTTP/1.1 (multiplexing)
+- ☐ Client negotiates HTTP/2 via ALPN
+- ☐ Server accepts HTTP/2 connections
+- ☐ Multiple concurrent streams per connection
+- ☐ HPACK reduces header overhead
+- ☐ Flow control prevents overwhelming
+- ☐ Performance improvement over HTTP/1.1 (multiplexing)
 
 ---
 
@@ -264,4 +253,4 @@
 
 ---
 
-**Last updated**: 2025-11-19
+**Last updated**: 2026-01-01
