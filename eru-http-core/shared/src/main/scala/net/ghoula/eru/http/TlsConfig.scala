@@ -55,12 +55,18 @@ enum TlsVersion {
   *   - Useful for self-signed certificates in local development
   *   - WARNING: Exposes you to man-in-the-middle attacks
   *
+  * ==Server Configuration==
+  *
+  * For HTTPS servers, you must provide a keystore containing the server's certificate and private
+  * key:
+  *   - `keyStorePath`: Path to the PKCS12 or JKS keystore file
+  *   - `keyStorePassword`: Password for the keystore
+  *
   * ==Custom Certificates==
   *
   * To use custom certificates (for client authentication or custom CA):
-  *   - For clients: Configure your JVM's truststore or use Netty's SslContextBuilder
-  *   - For servers: Provide certificate and private key files
-  *   - See Netty SSL documentation for advanced certificate configuration
+  *   - For clients: Configure your JVM's truststore or use custom trust managers
+  *   - For servers: Provide certificate and private key in a keystore file
   *
   * @param enabled
   *   Whether TLS/SSL is enabled. Set to false for plain HTTP connections.
@@ -73,12 +79,18 @@ enum TlsVersion {
   * @param verifyHostname
   *   If true, verify that the certificate's hostname matches the requested hostname. This prevents
   *   man-in-the-middle attacks. Should only be disabled for testing. Default is true.
+  * @param keyStorePath
+  *   Path to the server keystore file (PKCS12 or JKS). Required for HTTPS servers.
+  * @param keyStorePassword
+  *   Password for the server keystore. Required for HTTPS servers.
   */
 final case class TlsConfig(
   enabled: Boolean = true,
   protocols: List[TlsVersion] = List(TlsVersion.TLSv1_3, TlsVersion.TLSv1_2),
   trustAll: Boolean = false,
-  verifyHostname: Boolean = true
+  verifyHostname: Boolean = true,
+  keyStorePath: Option[String] = None,
+  keyStorePassword: Option[String] = None
 )
 
 object TlsConfig {

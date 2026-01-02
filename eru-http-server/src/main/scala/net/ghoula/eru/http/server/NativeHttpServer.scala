@@ -3,7 +3,7 @@ package net.ghoula.eru.http.server
 import jdk.net.ExtendedSocketOptions
 
 import java.net.InetSocketAddress
-import java.nio.channels.{ServerSocketChannel, SocketChannel}
+import java.nio.channels.{ReadableByteChannel, ServerSocketChannel, SocketChannel, WritableByteChannel}
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
 import scala.annotation.unused
@@ -71,15 +71,16 @@ private[server] final class NativeHttpServer(
 
   /** Accept loop - uses Selector for efficient non-blocking accept.
     *
-    * Uses NIO Selector to wait for incoming connections efficiently, then dispatches
-    * each connection to its own Virtual Thread for handling. This avoids blocking
-    * on accept() and allows handling thousands of concurrent connection attempts.
+    * Uses NIO Selector to wait for incoming connections efficiently, then dispatches each
+    * connection to its own Virtual Thread for handling. This avoids blocking on accept() and allows
+    * handling thousands of concurrent connection attempts.
     *
-    * With SO_REUSEPORT (acceptorThreads > 1), multiple instances of this loop run
-    * concurrently, each with its own ServerSocketChannel bound to the same port.
-    * The kernel distributes incoming connections across acceptors for multi-core scaling.
+    * With SO_REUSEPORT (acceptorThreads > 1), multiple instances of this loop run concurrently,
+    * each with its own ServerSocketChannel bound to the same port. The kernel distributes incoming
+    * connections across acceptors for multi-core scaling.
     *
-    * @param serverSocket The server socket for this accept loop (unique per acceptor thread)
+    * @param serverSocket
+    *   The server socket for this accept loop (unique per acceptor thread)
     */
   private def acceptLoop(serverSocket: ServerSocketChannel): Eru[HttpError, Unit] = {
     Eru.effect {
@@ -98,8 +99,11 @@ private[server] final class NativeHttpServer(
 
           if key.isAcceptable() then {
             // Accept all pending connections
+            // scalafix:off DisableSyntax.null
+            // Java NIO accept() returns null in non-blocking mode when no connections pending
             var clientSocket = serverSocket.accept()
             while clientSocket != null do {
+              // scalafix:on DisableSyntax.null
               // Configure socket
               clientSocket.configureBlocking(true) // Client socket uses blocking mode on VT
 
@@ -162,15 +166,15 @@ private[server] final class NativeHttpServer(
 
   /** Handle requests in a loop for HTTP keep-alive support.
     *
-    * Continues handling requests on the same socket until:
+    * Continues handling requests on the same channel until:
     *   - Connection: close header is received
     *   - An error occurs
-    *   - Socket is closed by client
+    *   - Channel is closed by client
     */
-  private def handleRequestLoop(socket: SocketChannel): Eru[HttpError, Unit] = {
+  private def handleRequestLoop(channel: ReadableByteChannel & WritableByteChannel): Eru[HttpError, Unit] = {
     // Create BufferedSocketReader ONCE per connection and reuse for all requests
     // This is critical for performance - avoids allocating 8KB direct ByteBuffer per request
-    val reader = new net.ghoula.eru.http.BufferedSocketReader(socket)
+    val reader = new net.ghoula.eru.http.BufferedSocketReader(channel)
 
     // Create write buffer ONCE per connection for zero-allocation response writing
     // 8KB buffer is sufficient for most HTTP response headers
@@ -207,7 +211,7 @@ private[server] final class NativeHttpServer(
         }
 
         // Write response with reusable buffer (zero-allocation, blocking write - efficient on VT!)
-        _ <- HttpWriter.writeResponseWithBuffer(socket, response, writeBuffer)
+        _ <- HttpWriter.writeResponseWithBuffer(channel, response, writeBuffer)
 
         // Check if we should continue the loop (keep-alive)
         shouldContinue = shouldKeepAlive(request, response)
@@ -317,17 +321,14 @@ private[server] final class NativeHttpServer(
     * Uses SSLEngine with blocking mode. The handshake blocks the Virtual Thread, which is efficient
     * since VTs are cheap.
     */
-  private def wrapWithTLS(socket: SocketChannel, @unused _ctx: SSLContext): Eru[HttpError, SocketChannel] =
+  private def wrapWithTLS(
+    socket: SocketChannel,
+    ctx: SSLContext
+  ): Eru[HttpError, ReadableByteChannel & WritableByteChannel] =
     Eru.effect {
-      // TODO: Implement SSL wrapping
-      // For now, return unwrapped socket
-      // Full implementation would:
-      // 1. Create SSLEngine from ctx
-      // 2. Configure SSL parameters
-      // 3. Perform handshake (blocking is fine on VT)
-      // 4. Return wrapped socket that encrypts/decrypts
-
-      socket
+      val sslChannel = SSLSocketChannel.server(socket, ctx)
+      sslChannel.doHandshake()
+      sslChannel
     }.mapError(e => HttpError.NetworkError(s"TLS handshake failed: ${e.getMessage}", Some(e)))
 
   /** Convert HTTP error to error response
@@ -415,8 +416,8 @@ private[server] object NativeHttpServer {
 
       Some(sockets)
     } catch {
-      case _: UnsupportedOperationException => None  // Platform doesn't support SO_REUSEPORT
-      case _: Exception => None                       // Any other error
+      case _: UnsupportedOperationException => None // Platform doesn't support SO_REUSEPORT
+      case _: Exception => None // Any other error
     }
   }
 
@@ -429,8 +430,8 @@ private[server] object NativeHttpServer {
     *   - No ChannelHandlers
     *   - Just pure Eru effects + blocking NIO
     *
-    * With acceptorThreads > 1, creates multiple ServerSocketChannels with SO_REUSEPORT
-    * for kernel-level load balancing (Linux 3.9+). Each acceptor runs its own accept loop.
+    * With acceptorThreads > 1, creates multiple ServerSocketChannels with SO_REUSEPORT for
+    * kernel-level load balancing (Linux 3.9+). Each acceptor runs its own accept loop.
     */
   def create(
     config: HttpServerConfig,
@@ -450,9 +451,9 @@ private[server] object NativeHttpServer {
             case None =>
               // SO_REUSEPORT not available, fall back to single acceptor
               System.err.println(
-                s"[WARN] SO_REUSEPORT not available on this JDK/platform. " +
-                s"Falling back to single-threaded accept (acceptorThreads=${requestedAcceptors} -> 1). " +
-                s"For best performance on Linux, use a JDK that supports jdk.net.ExtendedSocketOptions.SO_REUSEPORT"
+                "[WARN] SO_REUSEPORT not available on this JDK/platform. " +
+                  s"Falling back to single-threaded accept (acceptorThreads=${requestedAcceptors} -> 1). " +
+                  "For best performance on Linux, use a JDK that supports jdk.net.ExtendedSocketOptions.SO_REUSEPORT"
               )
               (1, List(ServerSocketChannel.open()))
           }
@@ -461,9 +462,11 @@ private[server] object NativeHttpServer {
         }
 
         if actualAcceptors == 1 && requestedAcceptors > 1 then {
-          System.err.println(s"[INFO] Using single-threaded accept loop. CPU scaling will be limited.")
+          System.err.println("[INFO] Using single-threaded accept loop. CPU scaling will be limited.")
         } else if actualAcceptors > 1 then {
-          System.err.println(s"[INFO] Using SO_REUSEPORT with ${actualAcceptors} acceptor threads for multi-core scaling")
+          System.err.println(
+            s"[INFO] Using SO_REUSEPORT with ${actualAcceptors} acceptor threads for multi-core scaling"
+          )
         }
 
         sockets
@@ -479,18 +482,12 @@ private[server] object NativeHttpServer {
     } yield server
   }
 
-  /** Create SSL context from TLS configuration
+  /** Create SSL context from TLS configuration.
+    *
+    * Loads server certificate and key from the configured keystore.
     */
-  private def createSSLContext(@unused _tlsConfig: TlsConfig): Eru[HttpError, SSLContext] =
+  private def createSSLContext(tlsConfig: TlsConfig): Eru[HttpError, SSLContext] =
     Eru.effect {
-      // TODO: Implement proper SSL context creation
-      // For now, return default context
-      // Full implementation would:
-      // 1. Load KeyStore from certificate/key files
-      // 2. Initialize KeyManagerFactory
-      // 3. Configure supported protocols
-      // 4. Create and initialize SSLContext
-
-      SSLContext.getDefault
+      SSLContextFactory.createServerContext(tlsConfig)
     }.mapError(e => HttpError.NetworkError(s"Failed to create SSL context: ${e.getMessage}", Some(e)))
 }

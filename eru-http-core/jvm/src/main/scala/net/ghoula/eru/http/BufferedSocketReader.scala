@@ -3,24 +3,24 @@ package net.ghoula.eru.http
 import jdk.net.ExtendedSocketOptions
 
 import java.nio.ByteBuffer
-import java.nio.channels.SocketChannel
+import java.nio.channels.{ReadableByteChannel, SocketChannel}
 
-/** Buffered reader for socket channels.
+/** Buffered reader for byte channels.
   *
   * Reads data in chunks and buffers it to minimize syscalls. This is a massive performance
   * improvement over byte-by-byte reading.
   *
   * Can be reused across multiple requests on the same connection by calling reset().
   *
-  * @param socket
-  *   Socket channel to read from
+  * @param channel
+  *   Channel to read from (SocketChannel, SSLSocketChannel, etc.)
   * @param bufferSize
   *   Size of internal read buffer (default 8KB)
   * @param maxLineLength
   *   Maximum line length to prevent memory exhaustion (default 8KB)
   */
 private[http] final class BufferedSocketReader(
-  socket: SocketChannel,
+  channel: ReadableByteChannel,
   bufferSize: Int = 8192,
   maxLineLength: Int = 8192
 ) {
@@ -115,21 +115,25 @@ private[http] final class BufferedSocketReader(
     result
   }
 
-  /** Refill internal buffer from socket. */
+  /** Refill internal buffer from channel. */
   private def fillBuffer(): Unit = {
     buffer.clear() // Switch to write mode
 
     // Set TCP_QUICKACK before each read (it's not sticky!)
     // This prevents 40ms delayed ACK on Linux by immediately ACKing received data
     // instead of waiting for the delayed ACK timer (typically 40ms)
-    // Note: Only available on Linux, silently ignored on other platforms
-    try {
-      socket.setOption(ExtendedSocketOptions.TCP_QUICKACK, true)
-    } catch {
-      case _: Exception => () // Not available on this platform (e.g., non-Linux)
+    // Note: Only available on Linux SocketChannels, silently ignored otherwise
+    channel match {
+      case sc: SocketChannel =>
+        try {
+          sc.setOption(ExtendedSocketOptions.TCP_QUICKACK, true)
+        } catch {
+          case _: Exception => () // Not available on this platform (e.g., non-Linux)
+        }
+      case _ => () // Not a SocketChannel (e.g., SSLSocketChannel wrapper)
     }
 
-    val bytesRead = socket.read(buffer)
+    val bytesRead = channel.read(buffer)
     buffer.flip() // Switch back to read mode
 
     if bytesRead < 0 then {

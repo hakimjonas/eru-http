@@ -35,9 +35,9 @@ import net.ghoula.eru.http.{ContentEncoding, TlsConfig}
   *   Optional TLS/SSL configuration. None = plain HTTP, Some(config) = HTTPS with specified TLS
   *   settings. For HTTPS, you must provide proper certificates (development mode uses self-signed).
   * @param acceptorThreads
-  *   Number of acceptor threads for SO_REUSEPORT multi-threaded accept (Linux 3.9+).
-  *   Default is number of available processors. Each acceptor runs its own accept loop,
-  *   enabling kernel-level load balancing across cores. Set to 1 to disable SO_REUSEPORT.
+  *   Number of acceptor threads for SO_REUSEPORT multi-threaded accept (Linux 3.9+). Default is
+  *   number of available processors. Each acceptor runs its own accept loop, enabling kernel-level
+  *   load balancing across cores. Set to 1 to disable SO_REUSEPORT.
   */
 final case class HttpServerConfig(
   host: String = "0.0.0.0",

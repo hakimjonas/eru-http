@@ -3,7 +3,6 @@ package net.ghoula.eru.http.client
 import java.nio.channels.SocketChannel
 import java.util.concurrent.TimeoutException
 import javax.net.ssl.SSLContext
-import scala.annotation.unused
 
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
@@ -181,11 +180,22 @@ private[client] final class NativeHttpClient(
     request: Request[Body]
   ): Eru[HttpError, Response[Bytes]] = {
     for {
-      // Wrap with TLS if needed
+      // Get or create TLS channel if needed
       secureSocket <-
         if request.uri.scheme.contains("https") then {
           sslContext match {
-            case Some(ctx) => wrapWithTLS(conn.socket, request.uri.host.getOrElse(""), conn.port, ctx)
+            case Some(ctx) =>
+              // Check if we already have an SSL channel for this connection (reuse!)
+              pool.getSSLChannel(conn).flatMap {
+                case Some(existingChannel) =>
+                  // Reuse existing TLS session
+                  Eru.succeed(existingChannel)
+                case None =>
+                  // First HTTPS request on this connection - create and store SSL channel
+                  wrapWithTLS(conn.socket, request.uri.host.getOrElse(""), conn.port, ctx).flatMap { newChannel =>
+                    pool.setSSLChannel(conn, newChannel).map(_ => newChannel)
+                  }
+              }
             case None => Eru.fail(HttpError.NetworkError("HTTPS requested but no SSL context configured", None))
           }
         } else {
@@ -233,6 +243,9 @@ private[client] final class NativeHttpClient(
           Eru.succeed(requestWithCookies)
         }
 
+      // Determine if this is an HTTPS request
+      isHttps = request.uri.scheme.contains("https")
+
       // Get buffer for this connection (managed separately for type safety)
       buffer <- pool.getBuffer(conn)
 
@@ -246,8 +259,22 @@ private[client] final class NativeHttpClient(
           case e: Throwable => HttpError.NetworkError(s"Write error: ${e.getMessage}", Some(e))
         }
 
-      // Get reader for this connection (pooled for zero-allocation response parsing)
-      reader <- pool.getReader(conn)
+      // Get reader: for HTTPS use pooled SSL reader, for HTTP use pooled reader
+      reader <-
+        if isHttps then {
+          // For HTTPS, use pooled SSL reader (wraps SSLSocketChannel for decrypted data)
+          pool.getSSLReader(conn).flatMap {
+            case Some(existingReader) =>
+              Eru.succeed(existingReader)
+            case None =>
+              // First HTTPS request - create and store SSL reader
+              val newReader = new BufferedSocketReader(secureSocket)
+              pool.setSSLReader(conn, newReader).map(_ => newReader)
+          }
+        } else {
+          // For HTTP, use pooled reader (zero-allocation benefit)
+          pool.getReader(conn)
+        }
 
       // Read response with timeout using pooled reader
       response <- HttpParser
@@ -385,23 +412,26 @@ private[client] final class NativeHttpClient(
   }
 
   /** Wrap socket with TLS/SSL
+    *
+    * Creates an SSLSocketChannel that encrypts/decrypts data transparently. The handshake is
+    * performed synchronously (fine on Virtual Threads).
     */
   private def wrapWithTLS(
     socket: SocketChannel,
-    @unused _host: String,
-    @unused _port: Int,
-    @unused _ctx: SSLContext
-  ): Eru[HttpError, SocketChannel] =
+    host: String,
+    port: Int,
+    ctx: SSLContext
+  ): Eru[HttpError, SSLSocketChannel] =
     Eru.effect {
-      // TODO: Implement SSL wrapping
-      // For now, return unwrapped socket
-      // Full implementation would:
-      // 1. Create SSLEngine from ctx
-      // 2. Configure SSL parameters (hostname verification, etc.)
-      // 3. Perform handshake (blocking is fine on VT)
-      // 4. Return wrapped socket that encrypts/decrypts
-
-      socket
+      val sslChannel = SSLSocketChannel.client(
+        socket,
+        ctx,
+        host,
+        port,
+        verifyHostname = config.tlsConfig.verifyHostname
+      )
+      sslChannel.doHandshake()
+      sslChannel
     }.mapError(e => HttpError.NetworkError(s"TLS handshake failed: ${e.getMessage}", Some(e)))
 
   /** Convert response body to Bytes
@@ -544,16 +574,11 @@ private[client] object NativeHttpClient {
     } yield new NativeHttpClient(config, sslContext, pool)
 
   /** Create SSL context from TLS configuration
+    *
+    * Configures trust managers and protocol settings based on TlsConfig.
     */
-  private def createSSLContext(@unused _tlsConfig: TlsConfig): Eru[HttpError, SSLContext] =
+  private def createSSLContext(tlsConfig: TlsConfig): Eru[HttpError, SSLContext] =
     Eru.effect {
-      // TODO: Implement proper SSL context creation
-      // For now, return default context
-      // Full implementation would:
-      // 1. Configure trust managers (trustAll vs system trust store)
-      // 2. Configure supported protocols
-      // 3. Create and initialize SSLContext
-
-      SSLContext.getDefault
+      SSLContextFactory.createClientContext(tlsConfig)
     }.mapError(e => HttpError.NetworkError(s"Failed to create SSL context: ${e.getMessage}", Some(e)))
 }

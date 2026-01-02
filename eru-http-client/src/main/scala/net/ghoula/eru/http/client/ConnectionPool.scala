@@ -10,6 +10,7 @@ import scala.concurrent.duration.*
 
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
+import net.ghoula.eru.http.SSLSocketChannel
 import net.ghoula.eru.prelude.*
 
 /** Opaque type for host:port connection keys.
@@ -142,6 +143,56 @@ trait ConnectionPool {
     */
   def getReader(conn: PooledConnection): Eru[HttpError, BufferedSocketReader]
 
+  /** Get an existing SSL channel for a connection, if one was previously created.
+    *
+    * For HTTPS connections, the SSLSocketChannel must be reused across requests on the same
+    * connection to avoid re-handshaking.
+    *
+    * @param conn
+    *   the connection to check
+    * @return
+    *   an effect that yields Some(sslChannel) if exists, None otherwise
+    */
+  def getSSLChannel(conn: PooledConnection): Eru[HttpError, Option[SSLSocketChannel]]
+
+  /** Store an SSL channel for a connection.
+    *
+    * Called after TLS handshake completes to enable reuse on subsequent requests.
+    *
+    * @param conn
+    *   the connection
+    * @param sslChannel
+    *   the SSL channel to store
+    * @return
+    *   an effect that completes when stored
+    */
+  def setSSLChannel(conn: PooledConnection, sslChannel: SSLSocketChannel): Eru[HttpError, Unit]
+
+  /** Get an existing SSL reader for a connection, if one was previously created.
+    *
+    * For HTTPS connections, the BufferedSocketReader wraps the SSLSocketChannel (not the raw
+    * socket) and must be reused across requests to avoid allocations.
+    *
+    * @param conn
+    *   the connection to check
+    * @return
+    *   an effect that yields Some(reader) if exists, None otherwise
+    */
+  def getSSLReader(conn: PooledConnection): Eru[HttpError, Option[BufferedSocketReader]]
+
+  /** Store an SSL reader for a connection.
+    *
+    * Called after first HTTPS request to enable reuse on subsequent requests.
+    *
+    * @param conn
+    *   the connection
+    * @param reader
+    *   the SSL reader to store
+    * @return
+    *   an effect that completes when stored
+    */
+  def setSSLReader(conn: PooledConnection, reader: BufferedSocketReader): Eru[HttpError, Unit]
+
   /** Shutdown the pool and close all connections.
     *
     * After shutdown, the pool cannot be used.
@@ -202,6 +253,14 @@ private[client] final class NativeConnectionPool(
   // Reader management: per-socket BufferedSocketReaders for zero-allocation response parsing
   // Each reader contains 8KB ByteBuffer + StringBuilder, reused across all requests on that connection
   private val readers = new java.util.concurrent.ConcurrentHashMap[SocketChannel, BufferedSocketReader]()
+
+  // SSL channel management: per-socket SSLSocketChannel wrappers for HTTPS connection reuse
+  // Must be preserved across requests to avoid re-handshaking
+  private val sslChannels = new java.util.concurrent.ConcurrentHashMap[SocketChannel, SSLSocketChannel]()
+
+  // SSL reader management: per-socket BufferedSocketReaders that wrap SSLSocketChannel
+  // Separate from regular readers because they read from SSLSocketChannel, not raw socket
+  private val sslReaders = new java.util.concurrent.ConcurrentHashMap[SocketChannel, BufferedSocketReader]()
 
   def acquire(host: String, port: Int): Eru[HttpError, PooledConnection] = {
     for {
@@ -285,6 +344,10 @@ private[client] final class NativeConnectionPool(
       _ <- Eru.effect {
         Option(readers.get(conn.socket)).foreach(_.reset())
       }.mapError(e => HttpError.NetworkError(s"Failed to reset reader: ${e.getMessage}", Some(e)))
+      // Reset SSL reader for next use (if it exists)
+      _ <- Eru.effect {
+        Option(sslReaders.get(conn.socket)).foreach(_.reset())
+      }.mapError(e => HttpError.NetworkError(s"Failed to reset SSL reader: ${e.getMessage}", Some(e)))
       _ <- stateRef.update { state =>
         releaseConnection(state, conn, now)
       }
@@ -345,8 +408,38 @@ private[client] final class NativeConnectionPool(
     }.mapError(e => HttpError.NetworkError(s"Failed to get reader: ${e.getMessage}", Some(e)))
   }
 
+  def getSSLChannel(conn: PooledConnection): Eru[HttpError, Option[SSLSocketChannel]] = {
+    Eru.effect {
+      Option(sslChannels.get(conn.socket))
+    }.mapError(e => HttpError.NetworkError(s"Failed to get SSL channel: ${e.getMessage}", Some(e)))
+  }
+
+  def setSSLChannel(conn: PooledConnection, sslChannel: SSLSocketChannel): Eru[HttpError, Unit] = {
+    Eru.effect {
+      sslChannels.put(conn.socket, sslChannel)
+      ()
+    }.mapError(e => HttpError.NetworkError(s"Failed to set SSL channel: ${e.getMessage}", Some(e)))
+  }
+
+  def getSSLReader(conn: PooledConnection): Eru[HttpError, Option[BufferedSocketReader]] = {
+    Eru.effect {
+      Option(sslReaders.get(conn.socket))
+    }.mapError(e => HttpError.NetworkError(s"Failed to get SSL reader: ${e.getMessage}", Some(e)))
+  }
+
+  def setSSLReader(conn: PooledConnection, reader: BufferedSocketReader): Eru[HttpError, Unit] = {
+    Eru.effect {
+      sslReaders.put(conn.socket, reader)
+      ()
+    }.mapError(e => HttpError.NetworkError(s"Failed to set SSL reader: ${e.getMessage}", Some(e)))
+  }
+
   def remove(conn: PooledConnection): Eru[HttpError, Unit] = {
     for {
+      // Close SSL channel first if exists (sends TLS close_notify)
+      _ <- Eru.effect {
+        Option(sslChannels.remove(conn.socket)).foreach(_.close())
+      }.mapError(e => HttpError.NetworkError(s"Failed to close SSL channel: ${e.getMessage}", Some(e)))
       _ <- closeSocket(conn.socket)
       _ <- Eru
         .effect(buffers.remove(conn.socket)) // Clean up buffer
@@ -354,6 +447,9 @@ private[client] final class NativeConnectionPool(
       _ <- Eru
         .effect(readers.remove(conn.socket)) // Clean up reader
         .mapError(e => HttpError.NetworkError(s"Failed to remove reader: ${e.getMessage}", Some(e)))
+      _ <- Eru
+        .effect(sslReaders.remove(conn.socket)) // Clean up SSL reader
+        .mapError(e => HttpError.NetworkError(s"Failed to remove SSL reader: ${e.getMessage}", Some(e)))
       _ <- stateRef.update { state =>
         removeConnection(state, conn)
       }
@@ -379,6 +475,11 @@ private[client] final class NativeConnectionPool(
     for {
       state <- stateRef.get
       allConns = collectAllConnections(state)
+      // Close SSL channels first (sends TLS close_notify)
+      _ <- Eru.effect {
+        sslChannels.values().forEach(_.close())
+        sslChannels.clear()
+      }.mapError(e => HttpError.NetworkError(s"Failed to close SSL channels: ${e.getMessage}", Some(e)))
       _ <- closeAllConnections(allConns)
       _ <- Eru
         .effect(buffers.clear()) // Clean up all buffers
@@ -386,6 +487,9 @@ private[client] final class NativeConnectionPool(
       _ <- Eru
         .effect(readers.clear()) // Clean up all readers
         .mapError(e => HttpError.NetworkError(s"Failed to clear readers: ${e.getMessage}", Some(e)))
+      _ <- Eru
+        .effect(sslReaders.clear()) // Clean up all SSL readers
+        .mapError(e => HttpError.NetworkError(s"Failed to clear SSL readers: ${e.getMessage}", Some(e)))
       _ <- stateRef.set(PoolState.empty)
     } yield ()
   }
