@@ -195,4 +195,32 @@ object TestHttpServer {
 
     new TestHttpServer(actualPort, server, runtime)
   }
+
+  /** Creates a test server that returns chunked (Transfer-Encoding: chunked) responses.
+    *
+    * This is used to test that the client properly handles streaming responses.
+    */
+  def chunked(
+    port: Int = 0,
+    body: String = "Hello from chunked response!"
+  )(using runtime: EruRuntime): TestHttpServer = {
+    val requestHandler: Request[Body] => Eru[HttpError, Response[Body]] = _ => {
+      // Create a streaming body with no content length (triggers chunked encoding)
+      val bytes = Bytes.fromString(body, Charset.UTF8)
+      val chunkStream = ChunkStream.fromBytes(bytes)
+      val streamBody = Body.Stream(Eru.succeed(chunkStream), contentLength = None)
+      Eru.succeed(Response(StatusCode.Ok, Headers.empty, streamBody))
+    }
+
+    val config = HttpServerConfig.localhost.withPort(port)
+
+    val startEffect = for {
+      srv <- HttpServer.create(config, requestHandler)
+      addr <- srv.start
+    } yield (srv, addr.port)
+
+    val (server, actualPort) = startEffect.unsafeRunSync()
+
+    new TestHttpServer(actualPort, server, runtime)
+  }
 }

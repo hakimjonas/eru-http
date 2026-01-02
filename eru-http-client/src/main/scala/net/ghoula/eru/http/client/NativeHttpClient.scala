@@ -90,7 +90,7 @@ private[client] final class NativeHttpClient(
       }
 
       // Convert back to Response[Bytes]
-      responseBytes = convertBodyToBytes(interceptedResponse)
+      responseBytes <- convertBodyToBytes(interceptedResponse)
     } yield responseBytes
 
   /** Internal request execution with redirect handling
@@ -291,8 +291,8 @@ private[client] final class NativeHttpClient(
         if config.automaticDecompression then decompressResponse(response)
         else Eru.succeed(response)
 
-      // Convert body to Bytes
-      responseBytes = convertBodyToBytes(decompressedResponse)
+      // Convert body to Bytes (handles streaming/chunked bodies)
+      responseBytes <- convertBodyToBytes(decompressedResponse)
 
     } yield responseBytes
   }
@@ -434,18 +434,26 @@ private[client] final class NativeHttpClient(
       sslChannel
     }.mapError(e => HttpError.NetworkError(s"TLS handshake failed: ${e.getMessage}", Some(e)))
 
-  /** Convert response body to Bytes
+  /** Convert response body to Bytes.
+    *
+    * Handles all body types including streams (chunked transfer encoding). For streams, this
+    * eagerly reads all chunks into memory - use with caution for very large responses.
     */
-  private def convertBodyToBytes(response: Response[Body]): Response[Bytes] = {
-    val bytes = response.body match {
-      case Body.Empty => Bytes.empty
-      case Body.Text(text, _, charset) => Bytes.fromArray(text.getBytes(charset.toJavaCharset))
-      case Body.Binary(b, _) => b
-      case Body.Stream(_, _, _) =>
-        // TODO: Read stream to bytes
-        Bytes.empty
+  private def convertBodyToBytes(response: Response[Body]): Eru[HttpError, Response[Bytes]] = {
+    response.body match {
+      case Body.Empty =>
+        Eru.succeed(response.copy(body = Bytes.empty))
+      case Body.Text(text, _, charset) =>
+        Eru.succeed(response.copy(body = Bytes.fromArray(text.getBytes(charset.toJavaCharset))))
+      case Body.Binary(b, _) =>
+        Eru.succeed(response.copy(body = b))
+      case Body.Stream(chunks, _, _) =>
+        // Read stream chunks into memory
+        chunks
+          .flatMap(_.toBytes)
+          .map(bytes => response.copy(body = bytes))
+          .mapError(e => HttpError.NetworkError(s"Error reading stream body: $e", None))
     }
-    response.copy(body = bytes)
   }
 
   /** Add Host header to request if not already present (required for HTTP/1.1)

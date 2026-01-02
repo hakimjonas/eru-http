@@ -617,4 +617,52 @@ class HttpClientSpec extends FunSuite {
       server.shutdown()
     }
   }
+
+  // ===== Chunked Transfer Encoding Tests =====
+
+  test("HttpClient - handles chunked transfer encoding response") {
+    val expectedBody = "Hello from chunked response!"
+    val server = TestHttpServer.chunked(body = expectedBody)
+
+    try {
+      HttpClient
+        .scoped(HttpClientConfig.default) { client =>
+          for {
+            uri <- parseUri(server.url())
+            request <- createRequest("get", uri)
+            response <- client.send(request)
+          } yield {
+            assertEquals(response.status, StatusCode.Ok)
+            assertEquals(response.body.asString(Charset.UTF8), expectedBody)
+            assertEquals(response.body.length, expectedBody.length)
+          }
+        }
+        .assertSuccess
+    } finally {
+      server.shutdown()
+    }
+  }
+
+  test("HttpClient - handles large chunked response") {
+    val largeBody = "x" * 100000 // 100KB
+    val server = TestHttpServer.chunked(body = largeBody)
+
+    try {
+      HttpClient
+        .scoped(HttpClientConfig.default) { client =>
+          for {
+            uri <- parseUri(server.url())
+            request <- createRequest("get", uri)
+            response <- client.send(request)
+          } yield {
+            assertEquals(response.status, StatusCode.Ok)
+            assertEquals(response.body.length, largeBody.length)
+            assertEquals(response.body.asString(Charset.UTF8), largeBody)
+          }
+        }
+        .assertSuccess
+    } finally {
+      server.shutdown()
+    }
+  }
 }

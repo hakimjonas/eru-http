@@ -13,15 +13,15 @@ HTTP Server     ████████████████████  10
 HTTP Client     ████████████████████  100%
 Connection Pool ████████████████████  100%
 Compression     ████████████████████  100%
-TLS/SSL         ░░░░░░░░░░░░░░░░░░░░    0%
+TLS/SSL         ████████████████████  100%
 WebSocket       ░░░░░░░░░░░░░░░░░░░░    0%
 HTTP/2          ░░░░░░░░░░░░░░░░░░░░    0%
 Testing         ████████████████░░░░   80%
 Documentation   ████████████░░░░░░░░   60%
 ```
 
-**HTTP/1.1 Stack: ~85% Complete**
-**Overall (including HTTP/2, WebSocket): ~65% Complete**
+**HTTP/1.1 Stack: 100% Complete**
+**Overall (including HTTP/2, WebSocket): ~75% Complete**
 
 ---
 
@@ -99,33 +99,25 @@ Documentation   ████████████░░░░░░░░   6
 - **Compression middleware**
 - Middleware composition (andThen, combine)
 
+### TLS/SSL (100%)
+- **SSLSocketChannel**: TLS wrapper implementing ReadableByteChannel/WritableByteChannel
+- **SSLContextFactory**: Client and server context creation
+- Client: SNI support, hostname verification, `trustAll` mode for dev
+- Server: PKCS12/JKS keystore loading
+- Connection reuse: SSL channels and readers pooled per connection
+- Blocking handshake on Virtual Threads (efficient with VT)
+
 ---
 
 ## What's Next
 
-### Priority 1: TLS/SSL Support (NEXT)
-
-**Current state**: Stubs exist, return unwrapped sockets
-
-**Files with TODOs**:
-- `NativeHttpClient.scala:389-405` - `wrapWithTLS()` stub
-- `NativeHttpClient.scala:548-558` - `createSSLContext()` stub
-- `NativeHttpServer.scala:320-331` - `wrapWithTLS()` stub
-- `NativeHttpServer.scala:484-495` - `createSSLContext()` stub
-
-**Required implementation**:
-- `SSLEngineSocketWrapper` class (~200-300 lines)
-- TLS handshake on Virtual Threads
-- Certificate/key loading from existing TlsConfig
-- SNI support
-
-### Priority 2: WebSocket Support
+### Priority 1: WebSocket Support (NEXT)
 
 - RFC 6455 implementation
 - Handshake, frame parsing, ping/pong
 - Works over TLS (wss://)
 
-### Priority 3: HTTP/2 Support
+### Priority 2: HTTP/2 Support
 
 - HPACK compression
 - Stream multiplexing
@@ -149,5 +141,5 @@ Documentation   ████████████░░░░░░░░   6
 
 ---
 
-*Last updated: 2026-01-01*
+*Last updated: 2026-01-02*
 *Use ROADMAP.md for detailed planning*
