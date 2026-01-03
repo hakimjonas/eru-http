@@ -431,10 +431,12 @@ object ChunkStream {
     chunks.foldRight(empty: ChunkStream)((chunk, rest) => Cons(chunk, Eru.succeed(rest)))
 
   /** Creates a stream from an iterator of chunks.
+    *
+    * Uses lazy evaluation to avoid stack overflow with large iterators.
     */
   def fromIterator(iter: Iterator[Chunk]): ChunkStream = {
     if !iter.hasNext then Empty
-    else Cons(iter.next(), Eru.succeed(fromIterator(iter)))
+    else Cons(iter.next(), Eru.effectTotal(fromIterator(iter)))
   }
 
   /** Creates a stream from bytes.

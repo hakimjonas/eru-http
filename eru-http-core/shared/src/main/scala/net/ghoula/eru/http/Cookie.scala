@@ -222,9 +222,10 @@ object Cookie {
                 case "httponly" =>
                   acc.copy(httpOnly = true)
                 case "samesite" =>
-                  attrValue.flatMap { ss =>
-                    SameSite.parse(ss).attempt.unsafeRunSync().fold(_ => None, Some(_))
-                  }.map(s => acc.copy(sameSite = Some(s))).getOrElse(acc)
+                  attrValue
+                    .flatMap(SameSite.parseOption)
+                    .map(s => acc.copy(sameSite = Some(s)))
+                    .getOrElse(acc)
                 case _ =>
                   // Ignore unknown attributes per RFC 6265
                   acc
@@ -386,6 +387,20 @@ object SameSite {
       case "lax" => Eru.succeed(Lax)
       case "none" => Eru.succeed(None)
       case _ => Eru.fail(Cookie.InvalidCookie(value, "Invalid SameSite value (must be Strict, Lax, or None)"))
+    }
+  }
+
+  /** Pure parsing that returns Option instead of Eru.
+    *
+    * Used internally for cookie attribute parsing where invalid values are silently ignored per RFC
+    * 6265.
+    */
+  private[http] def parseOption(value: String): Option[SameSite] = {
+    value.toLowerCase match {
+      case "strict" => Some(Strict)
+      case "lax" => Some(Lax)
+      case "none" => Some(None)
+      case _ => scala.None
     }
   }
 }

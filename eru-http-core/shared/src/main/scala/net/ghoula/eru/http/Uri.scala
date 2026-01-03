@@ -112,7 +112,10 @@ object Uri {
           }
 
           val authorityStr = uri.substring(authorityStart, pos)
-          authorityOpt = Some(parseAuthority(authorityStr, uri))
+          authorityOpt = parseAuthority(authorityStr, uri) match {
+            case Right(auth) => Some(auth)
+            case Left(err) => throw err // Will be caught by mapError below
+          }
         }
 
         // Parse path
@@ -155,46 +158,48 @@ object Uri {
   }
 
   /** Parses authority component. authority = [ userinfo "@" ] host [ ":" port ]
+    *
+    * Returns Either for pure error handling within the Eru.effect block.
     */
-  private def parseAuthority(authority: String, originalUri: String): Authority = {
+  private def parseAuthority(authority: String, originalUri: String): Either[InvalidUri, Authority] = {
     if authority.isEmpty then {
-      throw InvalidUri(originalUri, "Authority cannot be empty")
-    }
-
-    // Check for userinfo
-    val atIdx = authority.indexOf('@')
-    val (userInfoOpt, hostPortStr) = if atIdx >= 0 then {
-      (Some(authority.substring(0, atIdx)), authority.substring(atIdx + 1))
+      Left(InvalidUri(originalUri, "Authority cannot be empty"))
     } else {
-      (None, authority)
-    }
-
-    // Parse host and port
-    val colonIdx = hostPortStr.lastIndexOf(':')
-    val (host, portOpt) = if colonIdx >= 0 then {
-      val hostPart = hostPortStr.substring(0, colonIdx)
-      val portStr = hostPortStr.substring(colonIdx + 1)
-
-      // Try to parse port
-      try {
-        val portNum = portStr.toInt
-        if portNum < 1 || portNum > 65535 then {
-          throw InvalidUri(originalUri, s"Invalid port: $portStr (must be 1-65535)")
-        }
-        (hostPart, Some(Port.unsafeFromInt(portNum)))
-      } catch {
-        case e: InvalidUri => throw e
-        case _: NumberFormatException => throw InvalidUri(originalUri, s"Invalid port: $portStr (not a number)")
+      // Check for userinfo
+      val atIdx = authority.indexOf('@')
+      val (userInfoOpt, hostPortStr) = if atIdx >= 0 then {
+        (Some(authority.substring(0, atIdx)), authority.substring(atIdx + 1))
+      } else {
+        (None, authority)
       }
-    } else {
-      (hostPortStr, None)
-    }
 
-    if host.isEmpty then {
-      throw InvalidUri(originalUri, "Host cannot be empty")
-    }
+      // Parse host and port
+      val colonIdx = hostPortStr.lastIndexOf(':')
+      val hostPortResult: Either[InvalidUri, (String, Option[Port])] = if colonIdx >= 0 then {
+        val hostPart = hostPortStr.substring(0, colonIdx)
+        val portStr = hostPortStr.substring(colonIdx + 1)
 
-    Authority(userInfoOpt, host, portOpt)
+        // Try to parse port
+        portStr.toIntOption match {
+          case Some(portNum) if portNum >= 1 && portNum <= 65535 =>
+            Right((hostPart, Some(Port.unsafeFromInt(portNum))))
+          case Some(_) =>
+            Left(InvalidUri(originalUri, s"Invalid port: $portStr (must be 1-65535)"))
+          case None =>
+            Left(InvalidUri(originalUri, s"Invalid port: $portStr (not a number)"))
+        }
+      } else {
+        Right((hostPortStr, None))
+      }
+
+      hostPortResult.flatMap { case (host, portOpt) =>
+        if host.isEmpty then {
+          Left(InvalidUri(originalUri, "Host cannot be empty"))
+        } else {
+          Right(Authority(userInfoOpt, host, portOpt))
+        }
+      }
+    }
   }
 
   /** Creates an HTTP URI.
