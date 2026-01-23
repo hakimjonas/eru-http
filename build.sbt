@@ -203,7 +203,7 @@ lazy val examples = (project in file("examples"))
     description := "Examples and benchmarks for eru-http",
     publish / skip := true
   )
-  .dependsOn(coreJVM, client, server)
+  .dependsOn(coreJVM % "compile->compile;test->test", client, server)
 
 // Standalone benchmarks with fat JAR assembly
 lazy val benchmarks = (project in file("benchmarks"))

@@ -210,17 +210,56 @@ private[server] final class NativeHttpServer(
           }
         }
 
+        // Check if this is a WebSocket upgrade response
+        isWebSocketUpgrade = WebSocketServer.isUpgradeResponse(response)
+
+        // Remove the internal handler ID header before sending to client
+        responseToSend =
+          if isWebSocketUpgrade then response.copy(headers = response.headers.remove("X-WebSocket-Handler-Id"))
+          else response
+
         // Write response with reusable buffer (zero-allocation, blocking write - efficient on VT!)
-        _ <- HttpWriter.writeResponseWithBuffer(channel, response, writeBuffer)
+        _ <- HttpWriter.writeResponseWithBuffer(channel, responseToSend, writeBuffer)
 
-        // Check if we should continue the loop (keep-alive)
-        shouldContinue = shouldKeepAlive(request, response)
+        // Handle WebSocket upgrade if detected
+        result <-
+          if isWebSocketUpgrade then {
+            // Get the handler and switch to WebSocket mode
+            WebSocketServer.getHandlerId(response) match {
+              case Some(handlerId) =>
+                WebSocketServer.retrieveHandler(handlerId) match {
+                  case Some(pending) =>
+                    // Create WebSocket connection and run the handler
+                    val wsConn = NativeServerWebSocketConnection.create(
+                      channel,
+                      reader,
+                      pending.config,
+                      pending.subprotocol,
+                      pending.request
+                    )
+                    // Run the WebSocket handler - this blocks until the connection closes
+                    pending.handler(wsConn).attempt.map { _ =>
+                      // WebSocket session ended, don't continue HTTP loop
+                      false
+                    }
+                  case None =>
+                    // Handler not found (shouldn't happen), continue as HTTP
+                    Eru.succeed(shouldKeepAlive(request, responseToSend))
+                }
+              case None =>
+                // No handler ID (shouldn't happen), continue as HTTP
+                Eru.succeed(shouldKeepAlive(request, responseToSend))
+            }
+          } else {
+            // Regular HTTP - check if we should continue the loop
+            Eru.succeed(shouldKeepAlive(request, responseToSend))
+          }
 
-      } yield shouldContinue
+      } yield result
 
       requestEffect.attempt.flatMap {
         case Result.Success(true) => loop(false) // Continue for next request
-        case Result.Success(false) => Eru.succeed(false) // Connection: close, exit cleanly
+        case Result.Success(false) => Eru.succeed(false) // Connection: close or WebSocket, exit cleanly
         case Result.Failure(_) => Eru.succeed(false) // Error, exit cleanly
       }
     }

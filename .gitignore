@@ -28,3 +28,6 @@ metals.sbt
 benchmark-results/*.txt
 benchmark-results/*.txt.summary
 !benchmark-results/.gitkeep
+
+# Autobahn test reports (generated)
+autobahn/reports/
