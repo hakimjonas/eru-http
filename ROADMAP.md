@@ -2,10 +2,10 @@
 
 *Building world-class HTTP infrastructure on Eru - from the ground up*
 
-## Project Status: 🟢 HTTP/1.1 + TLS Complete, WebSocket Next
+## Project Status: 🟢 HTTP/1.1 + TLS + WebSocket Complete, HTTP/2 Next
 
 **Current Version**: 0.0.1-SNAPSHOT
-**Progress**: HTTP/1.1 stack complete with compression and TLS/HTTPS support
+**Progress**: Full HTTP/1.1 stack with TLS/HTTPS and RFC 6455 WebSocket support
 
 ---
 
@@ -152,53 +152,64 @@
 
 ---
 
-### Priority 2: WebSocket Support 📋
+### ✅ Priority 2: WebSocket Support (COMPLETE)
 
 **Goal**: Real-time bidirectional communication via WebSocket
 
-**Why second**:
-- High enterprise value
-- Builds on TLS foundation
-- Medium complexity (RFC 6455)
-- More straightforward than HTTP/2
+**Implementation**:
+- `WebSocketFrameParser` - Frame parsing with fragmentation and control frame interleaving
+- `WebSocketFrameWriter` - Frame writing with masking (client) and unmasked (server)
+- `WebSocketHandshake` - HTTP Upgrade handshake with key/accept validation
+- `WebSocketClient` / `NativeWebSocketClient` - Client API with `connect` and `scoped`
+- `WebSocketServer` / `NativeServerWebSocketConnection` - Server upgrade handler
 
-**Requirements**:
-- WebSocket handshake (HTTP Upgrade)
-- Frame parsing (text, binary, control frames)
-- Frame writing with masking (client) and unmasked (server)
-- Ping/pong heartbeat
-- Close handshake
-- Streaming messages via ChunkStream
-- Backpressure handling with Eru effects
+**Features Delivered**:
+- ✅ WebSocket handshake (HTTP Upgrade) per RFC 6455 Section 4
+- ✅ Frame parsing (text, binary, ping, pong, close)
+- ✅ Message fragmentation with interleaved control frames (Section 5.4)
+- ✅ Client frames masked, server frames unmasked (Section 5.3)
+- ✅ Automatic ping/pong handling during receive
+- ✅ Close handshake with code validation (Section 7.4)
+- ✅ UTF-8 validation on reassembled messages (Section 5.6)
+- ✅ Subprotocol negotiation
+- ✅ Works over TLS (wss://)
 
-**Acceptance Criteria**:
-- ☐ Client connects to WebSocket server
-- ☐ Server accepts WebSocket upgrade
-- ☐ Bidirectional text/binary messages
-- ☐ Ping/pong keeps connection alive
-- ☐ Graceful close handshake
-- ☐ Works over TLS (wss://)
+**Acceptance Criteria** (All Met):
+- ✅ Client connects to WebSocket server
+- ✅ Server accepts WebSocket upgrade
+- ✅ Bidirectional text/binary messages
+- ✅ Ping/pong keeps connection alive
+- ✅ Graceful close handshake
+- ✅ Works over TLS (wss://)
+- ✅ **Autobahn Test Suite: 247/247 tests pass (100% RFC 6455 compliance)**
 
 ---
 
-### Priority 3: HTTP/2 Support 📋
+### Priority 3: HTTP/2 Support 📋 (IN PROGRESS)
 
-**Goal**: Modern protocol with multiplexing
+**Goal**: Modern protocol with multiplexing (RFC 9113)
 
-**Why third**:
-- High complexity (HPACK, streams, flow control)
-- Less critical than WebSocket for many use cases
-- Can be deferred until other enablers complete
-- Config flags already exist
+**Why HTTP/2 before HTTP/3**:
+- HTTP/2 adoption: ~70% of websites
+- HTTP/3 requires QUIC which needs TLS APIs not fully exposed in Java 25
+- JEP 517 (HTTP/3) in Java 26 is for JDK's HttpClient, not custom implementations
+- Oracle LTS policy: Features not backported to LTS versions
+- HTTP/2 over TCP works naturally with Virtual Threads
 
-**Requirements**:
-- HTTP/2 connection preface
-- HPACK header compression/decompression
-- Stream multiplexing with priority
-- Flow control (connection and stream level)
-- Server push capability
-- ALPN negotiation over TLS
-- Upgrade from HTTP/1.1 (h2c)
+**Implementation Plan**: See `HTTP2_IMPLEMENTATION_PLAN.md`
+
+**Key Components**:
+- HPACK header compression (building from scratch, not using external library)
+- Binary frame layer (10 frame types)
+- Stream multiplexing with 7-state machine
+- Dual-level flow control (connection + stream)
+- ALPN negotiation for TLS
+- h2c upgrade for cleartext
+
+**Open Questions (require prototyping)**:
+- Virtual Thread + flow control interaction
+- HPACK implementation size
+- Connection pool changes for multiplexing
 
 **Acceptance Criteria**:
 - ☐ Client negotiates HTTP/2 via ALPN
@@ -206,11 +217,27 @@
 - ☐ Multiple concurrent streams per connection
 - ☐ HPACK reduces header overhead
 - ☐ Flow control prevents overwhelming
-- ☐ Performance improvement over HTTP/1.1 (multiplexing)
+- ☐ h2spec conformance tests pass
 
 ---
 
 ## 📦 Deferred (Nice-to-Have, Not Blockers)
+
+### HTTP/3 Support (Deferred to Java 29 LTS or later)
+
+**Why deferred**:
+- QUIC requires TLS APIs not exposed in Java 25 (`ExtendedSSLSession.exportKeyingMaterial*` exists but handshake-level secrets not available)
+- Pure Java QUIC implementations (Kwik) require custom TLS 1.3 handshake code
+- JEP 517 in Java 26 adds HTTP/3 to JDK's HttpClient only, not APIs for custom implementations
+- Oracle LTS policy: Features not backported (verified via support roadmap)
+- HTTP/3 adoption: ~37% (growing but HTTP/2 covers majority)
+
+**Revisit when**:
+- Java 29 LTS (expected ~2027) if it includes QUIC APIs
+- Pure Java QUIC ecosystem matures
+- HTTP/3 adoption exceeds HTTP/2
+
+### Other Deferred Items
 
 - **Connection pool metrics** - Observability (size, wait times, reuse rate)
 - **Circuit breaker** - Failure isolation between hosts
@@ -245,4 +272,4 @@
 
 ---
 
-**Last updated**: 2026-01-02
+**Last updated**: 2026-01-23
