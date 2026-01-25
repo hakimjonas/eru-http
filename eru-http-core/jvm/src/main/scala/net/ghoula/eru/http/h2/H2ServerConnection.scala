@@ -958,12 +958,21 @@ final class H2ServerConnection private (
             )
             result <-
               if chunkSize <= 0 then {
-                // Window exhausted - wait for the stream's semaphore signal.
-                // The semaphore is released by replenishSendWindow() when window transitions
-                // from ≤0 to >0 (either from SETTINGS change or WINDOW_UPDATE).
-                // This provides proper synchronization instead of polling/yielding.
+                // Window exhausted - wait for the appropriate semaphore signal.
+                // The semaphore is released by replenishSendWindow() or replenishConnectionSendWindow()
+                // when window transitions from ≤0 to >0 (from SETTINGS change or WINDOW_UPDATE).
                 h2log("sendChunks: window exhausted, waiting for window signal")
-                stream.waitForWindowAvailable.eru.flatMap { _ =>
+                val waitEffect = if streamWindow <= 0 && connWindow <= 0 then {
+                  // Both exhausted - wait on stream (will retry and check connection after)
+                  stream.waitForWindowAvailable.eru
+                } else if streamWindow <= 0 then {
+                  // Only stream window exhausted
+                  stream.waitForWindowAvailable.eru
+                } else {
+                  // Only connection window exhausted
+                  connection.waitForConnectionWindowAvailable.eru
+                }
+                waitEffect.flatMap { _ =>
                   h2log("sendChunks: window signal received, retrying")
                   sendChunks(offset)
                 }

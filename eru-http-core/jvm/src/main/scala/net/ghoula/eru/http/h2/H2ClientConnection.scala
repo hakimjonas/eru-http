@@ -253,6 +253,10 @@ final class H2ClientConnection private (
 
   /** Send DATA frames for request body.
     *
+    * Implements flow control per RFC 9113 Section 5.2. When the flow control window is exhausted,
+    * waits for WINDOW_UPDATE frames to replenish it before continuing. This requires the caller to
+    * ensure frames are being read concurrently (via receiveResponse) to process WINDOW_UPDATE.
+    *
     * @param stream
     *   the stream to send on
     * @param data
@@ -266,27 +270,54 @@ final class H2ClientConnection private (
     connection.peerSettings.flatMap { peerSettings =>
       val maxDataSize = peerSettings.maxFrameSize
 
-      // Split data into frames if needed
+      // Split data into frames respecting flow control
       def sendChunks(offset: Int): Eru[H2Error, Int] = {
         if offset >= data.length then {
           Eru.succeed(stream.streamId)
         } else {
-          val remaining = data.length - offset
-          val chunkSize = math.min(remaining, maxDataSize)
-          val isLast = offset + chunkSize >= data.length
-          val chunk = java.util.Arrays.copyOfRange(data, offset, offset + chunkSize)
+          // Get current window sizes to determine how much we can send
+          for {
+            streamWindow <- stream.sendWindow
+            connWindow <- connection.connectionSendWindow
+            remaining = data.length - offset
+            // Only send as much as both windows allow
+            allowedByFlow = math.min(math.max(0, streamWindow), math.max(0, connWindow))
+            chunkSize = math.min(math.min(remaining, maxDataSize), allowedByFlow)
+            result <-
+              if chunkSize == 0 then {
+                // Flow control exhausted - wait for WINDOW_UPDATE on the appropriate window
+                // This requires concurrent frame reading (via receiveResponse) to process WINDOW_UPDATE
+                val waitEffect = if streamWindow <= 0 && connWindow <= 0 then {
+                  // Both exhausted - wait on either (first to signal wins, then retry checks again)
+                  // Use stream window as primary since it's per-stream and more likely to be the bottleneck
+                  stream.waitForWindowAvailable.eru
+                } else if streamWindow <= 0 then {
+                  // Only stream window exhausted
+                  stream.waitForWindowAvailable.eru
+                } else {
+                  // Only connection window exhausted
+                  connection.waitForConnectionWindowAvailable.eru
+                }
+                waitEffect.flatMap { _ =>
+                  sendChunks(offset) // Retry after window becomes available
+                }
+              } else {
+                val isLast = offset + chunkSize >= data.length
+                val chunk = java.util.Arrays.copyOfRange(data, offset, offset + chunkSize)
 
-          // Check flow control
-          connection.consumeConnectionSendWindow(chunkSize).flatMap { _ =>
-            stream.consumeSendWindow(chunkSize).flatMap { _ =>
-              val dataFrame = H2FrameCodec.dataFrame(stream.streamId, chunk, endStream = isLast && endStream)
-              writeFrame(dataFrame).flatMap { _ =>
-                stream.sendData(isLast && endStream).flatMap { _ =>
-                  sendChunks(offset + chunkSize)
+                // Consume flow control window and send
+                connection.consumeConnectionSendWindow(chunkSize).flatMap { _ =>
+                  stream.consumeSendWindow(chunkSize).flatMap { _ =>
+                    val dataFrame = H2FrameCodec.dataFrame(stream.streamId, chunk, endStream = isLast && endStream)
+                    writeFrame(dataFrame).flatMap { _ =>
+                      stream.sendData(isLast && endStream).flatMap { _ =>
+                        sendChunks(offset + chunkSize)
+                      }
+                    }
+                  }
                 }
               }
-            }
-          }
+          } yield result
         }
       }
 

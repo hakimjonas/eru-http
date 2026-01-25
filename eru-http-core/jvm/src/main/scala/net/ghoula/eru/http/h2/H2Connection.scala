@@ -50,7 +50,8 @@ final class H2Connection private (
   private val settingsAckedRef: Ref[Boolean],
   private val goawayStateRef: Ref[GoawayState],
   private val hpackEncoder: HpackEncoder,
-  private val hpackDecoder: HpackDecoder
+  private val hpackDecoder: HpackDecoder,
+  private val connectionWindowAvailableSemaphore: Semaphore
 )(using private val eruRuntime: EruRuntime) {
 
   // ============================================================================
@@ -116,6 +117,20 @@ final class H2Connection private (
         }
       }
       countActive(streams.values.toList, 0)
+    }
+  }
+
+  /** Get the next stream ID that will be used for a locally-initiated stream.
+    *
+    * This is useful for the client to know the stream ID before sendRequest completes, allowing
+    * concurrent frame reading (for WINDOW_UPDATE processing) during large uploads.
+    *
+    * @return
+    *   Eru effect with the next stream ID
+    */
+  def nextStreamId: Eru[Nothing, Int] = {
+    lastLocalStreamIdRef.get.map { lastLocalId =>
+      if isClient && lastLocalId == -1 then 1 else lastLocalId + 2
     }
   }
 
@@ -349,6 +364,9 @@ final class H2Connection private (
 
   /** Replenish the connection-level send window (from WINDOW_UPDATE).
     *
+    * When the window transitions from ≤0 to >0, releases the connectionWindowAvailableSemaphore to
+    * wake up any waiting senders.
+    *
     * @param increment
     *   window size increment
     * @return
@@ -358,14 +376,34 @@ final class H2Connection private (
     connectionSendWindowRef.modify { current =>
       val newWindow = current.toLong + increment
       if newWindow > Int.MaxValue then {
-        (current, Left(H2Error.FlowControlViolation(0, "Connection flow control window overflow")))
+        (current, Left((current, H2Error.FlowControlViolation(0, "Connection flow control window overflow"))))
       } else {
-        (newWindow.toInt, Right(newWindow.toInt))
+        // Return both old and new window values to detect transition
+        (newWindow.toInt, Right((current, newWindow.toInt)))
       }
     }.flatMap {
-      case Right(newWindow) => Eru.succeed(newWindow)
-      case Left(error) => Eru.fail(error)
+      case Right((oldWindow, newWindow)) =>
+        // Signal waiters when window becomes available (transitions from ≤0 to >0)
+        val shouldSignal = oldWindow <= 0 && newWindow > 0
+        if shouldSignal then {
+          connectionWindowAvailableSemaphore.release.eru.map(_ => newWindow)
+        } else {
+          Eru.succeed(newWindow)
+        }
+      case Left((_, error)) => Eru.fail(error)
     }
+  }
+
+  /** Wait until the connection-level send window becomes available (>0).
+    *
+    * This suspends the current fiber until replenishConnectionSendWindow signals that the window
+    * has transitioned from ≤0 to >0.
+    *
+    * @return
+    *   Suspending effect that completes when window is available
+    */
+  def waitForConnectionWindowAvailable: Suspending[Nothing, Unit] = {
+    connectionWindowAvailableSemaphore.acquire
   }
 
   /** Consume from the connection-level receive window.
@@ -535,6 +573,7 @@ object H2Connection {
       lastLocalStreamIdRef <- Ref.make(-1) // Client starts at 1 (odd)
       settingsAckedRef <- Ref.make(false)
       goawayStateRef <- Ref.make(GoawayState())
+      connectionWindowSemaphore <- Semaphore.make(0) // Start with 0 permits, signal when window available
     } yield new H2Connection(
       isClient = true,
       localSettings = localSettings,
@@ -547,7 +586,8 @@ object H2Connection {
       settingsAckedRef = settingsAckedRef,
       goawayStateRef = goawayStateRef,
       hpackEncoder = HpackEncoder(),
-      hpackDecoder = HpackDecoder()
+      hpackDecoder = HpackDecoder(),
+      connectionWindowAvailableSemaphore = connectionWindowSemaphore
     )
   }
 
@@ -568,6 +608,7 @@ object H2Connection {
       lastLocalStreamIdRef <- Ref.make(0) // Server starts at 2 (even)
       settingsAckedRef <- Ref.make(false)
       goawayStateRef <- Ref.make(GoawayState())
+      connectionWindowSemaphore <- Semaphore.make(0) // Start with 0 permits, signal when window available
     } yield new H2Connection(
       isClient = false,
       localSettings = localSettings,
@@ -580,7 +621,8 @@ object H2Connection {
       settingsAckedRef = settingsAckedRef,
       goawayStateRef = goawayStateRef,
       hpackEncoder = HpackEncoder(),
-      hpackDecoder = HpackDecoder()
+      hpackDecoder = HpackDecoder(),
+      connectionWindowAvailableSemaphore = connectionWindowSemaphore
     )
   }
 }

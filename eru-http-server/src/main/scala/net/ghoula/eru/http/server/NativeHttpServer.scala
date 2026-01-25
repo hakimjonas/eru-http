@@ -6,7 +6,6 @@ import java.net.InetSocketAddress
 import java.nio.channels.{ReadableByteChannel, ServerSocketChannel, SocketChannel, WritableByteChannel}
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
-import scala.annotation.unused
 
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
@@ -34,7 +33,7 @@ private[server] final class NativeHttpServer(
   handler: RequestHandler,
   serverSockets: List[ServerSocketChannel],
   sslContext: Option[SSLContext]
-)(using @unused runtime: EruRuntime)
+)(using runtime: EruRuntime)
     extends HttpServer {
 
   private val running = new AtomicBoolean(true)
@@ -182,6 +181,15 @@ private[server] final class NativeHttpServer(
   /** Handle an HTTP/2 connection.
     *
     * Uses H2ServerConnection to process HTTP/2 frames and handle requests.
+    *
+    * CRITICAL: Response handlers are forked to prevent flow control deadlock. Without forking,
+    * large responses (>65KB initial window) would block on sendData() waiting for WINDOW_UPDATE
+    * frames, but no fiber would be reading frames from the socket to receive those WINDOW_UPDATE
+    * frames.
+    *
+    * By forking the response handler, the main loop continues reading frames (which processes
+    * WINDOW_UPDATE via handleWindowUpdate), allowing blocked response fibers to wake up and
+    * continue sending data.
     */
   private def handleHttp2Connection(channel: SSLSocketChannel): Eru[HttpError, Unit] = {
     // Accept the HTTP/2 connection (exchange preface)
@@ -194,8 +202,8 @@ private[server] final class NativeHttpServer(
           .flatMap { case (streamId, h2Headers, body) =>
             // Convert HTTP/2 request to eru-http Request
             convertH2RequestToRequest(h2Headers, body).flatMap { request =>
-              // Execute the handler
-              handler(request).attempt.flatMap { handlerResult =>
+              // Fork the handler - main loop continues reading frames (processes WINDOW_UPDATE)
+              val handlerEffect = handler(request).attempt.flatMap { handlerResult =>
                 val response = handlerResult match {
                   case Result.Success(resp) => resp
                   case Result.Failure(httpError: HttpError) => errorToResponse(httpError)
@@ -215,12 +223,16 @@ private[server] final class NativeHttpServer(
 
                 h2conn.sendResponse(streamId, statusCode, responseHeaders, bodyBytes).mapError(h2ErrorToHttpError)
               }
+
+              // Fork and continue - don't wait for response to complete
+              // The forked fiber handles the response while main loop reads more frames
+              runtime.fork(handlerEffect).map(_ => ())
             }
           }
           .attempt
           .flatMap {
             case Result.Success(_) =>
-              // Request handled successfully, continue if connection is still usable
+              // Request received and handler forked, continue if connection is still usable
               h2conn.connection.isGoingAway.flatMap { goingAway =>
                 if goingAway then Eru.unit
                 else loop()

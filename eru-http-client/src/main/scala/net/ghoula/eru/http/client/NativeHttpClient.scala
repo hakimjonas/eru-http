@@ -285,25 +285,51 @@ private[client] final class NativeHttpClient(
           )
       }
 
-      // Send request
-      streamId <- h2conn
-        .sendRequest(method, path, authority, scheme, headers, bodyBytes)
-        .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
-        .mapError {
-          case _: TimeoutException => HttpError.TimeoutError(s"H2 request timeout after ${config.requestTimeout}")
-          case e: H2Error => h2ErrorToHttpError(e)
-          case e: Throwable => HttpError.NetworkError(s"H2 request error: ${e.getMessage}", Some(e))
-        }
+      // Get expected stream ID BEFORE sending - needed for concurrent receive
+      expectedStreamId <- h2conn.connection.nextStreamId
 
-      // Receive response
+      // Send request - fork to prevent flow control deadlock
+      // For large request bodies (>65KB), sendRequest() may block waiting for
+      // WINDOW_UPDATE frames. By forking the send and immediately starting to
+      // receive, we ensure WINDOW_UPDATE frames are processed (in receiveResponse's
+      // frame reading loop), which unblocks the send.
+      sendFiber <- runtime.fork(
+        h2conn
+          .sendRequest(method, path, authority, scheme, headers, bodyBytes)
+          .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
+          .mapError {
+            case _: TimeoutException => HttpError.TimeoutError(s"H2 request timeout after ${config.requestTimeout}")
+            case e: H2Error => h2ErrorToHttpError(e)
+            case e: Throwable => HttpError.NetworkError(s"H2 request error: ${e.getMessage}", Some(e))
+          }
+      )
+
+      // Receive response concurrently with send - this reads frames including
+      // WINDOW_UPDATE which unblocks the forked send fiber if it's waiting on flow control
       (responseHeaders, responseBody) <- h2conn
-        .receiveResponse(streamId)
+        .receiveResponse(expectedStreamId)
         .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
         .mapError {
           case _: TimeoutException => HttpError.TimeoutError(s"H2 response timeout after ${config.requestTimeout}")
           case e: H2Error => h2ErrorToHttpError(e)
           case e: Throwable => HttpError.NetworkError(s"H2 response error: ${e.getMessage}", Some(e))
         }
+
+      // Wait for send to complete (should have already completed by now, but ensure no errors)
+      sendExit <- sendFiber.await
+      actualStreamId <- sendExit match {
+        case Exit.Success(id) => Eru.succeed(id)
+        case Exit.Failure(error) => Eru.fail(error)
+        case Exit.Die(throwable) =>
+          Eru.fail(HttpError.NetworkError(s"Send fiber died: ${throwable.getMessage}", Some(throwable)))
+        case Exit.Interrupt(_, _) => Eru.fail(HttpError.NetworkError("Send fiber was interrupted", None))
+      }
+      _ <-
+        if actualStreamId != expectedStreamId then
+          Eru.fail(
+            HttpError.ProtocolError(s"Stream ID mismatch: expected $expectedStreamId, got $actualStreamId", "RFC 9113")
+          )
+        else Eru.unit
 
       // Parse :status pseudo-header
       statusValue <- Eru.fromOption(
