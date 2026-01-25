@@ -115,6 +115,12 @@ private[http] final class BufferedSocketReader(
     result
   }
 
+  /** Check if there's buffered data available without blocking.
+    *
+    * This is useful for checking if there are pending frames before making flow control decisions.
+    */
+  def hasBufferedData: Boolean = buffer.hasRemaining
+
   /** Refill internal buffer from channel. */
   private def fillBuffer(): Unit = {
     buffer.clear() // Switch to write mode

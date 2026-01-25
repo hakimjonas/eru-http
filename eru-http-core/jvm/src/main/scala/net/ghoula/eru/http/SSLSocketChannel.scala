@@ -16,10 +16,14 @@ import javax.net.ssl.{SSLContext, SSLEngine}
   *
   * ==Thread Safety==
   *
-  * This class is NOT thread-safe. SSLEngine is not designed for concurrent access, so read() and
-  * write() must not be called concurrently from multiple threads. The connection pool ensures
-  * exclusive access by tracking connections in an "inUse" set - a connection is only returned to
-  * the available pool after the request completes.
+  * Read operations are NOT thread-safe and should only be called from a single thread. Write
+  * operations are synchronized to allow concurrent writes from multiple threads (useful for HTTP/2
+  * where multiple streams may send responses concurrently).
+  *
+  * Note: SSLEngine is not designed for concurrent access, so read() and write() must not be called
+  * concurrently from multiple threads. The connection pool ensures exclusive access by tracking
+  * connections in an "inUse" set - a connection is only returned to the available pool after the
+  * request completes.
   *
   * For connection reuse across sequential requests (HTTP keep-alive), the same SSLSocketChannel
   * instance is reused, which is safe because each request completes before the next begins.
@@ -58,6 +62,9 @@ final class SSLSocketChannel private (
   // Track if handshake is complete
   private var handshakeComplete = false
 
+  // Lock for synchronized write operations (allows concurrent writes from multiple threads)
+  private val writeLock = new java.util.concurrent.locks.ReentrantLock()
+
   // Debug flag - enable with -Dssl.debug=true
   private val debug = java.lang.Boolean.getBoolean("ssl.debug")
 
@@ -87,6 +94,25 @@ final class SSLSocketChannel private (
     )
     handshakeComplete = true
   }
+
+  /** Get the negotiated application protocol from ALPN.
+    *
+    * Must be called after `doHandshake()` completes.
+    *
+    * @return
+    *   the negotiated protocol ("h2", "http/1.1", or "" if no ALPN)
+    */
+  def getApplicationProtocol: String = {
+    // Java's SSLEngine.getApplicationProtocol returns null when no ALPN was negotiated
+    Option(engine.getApplicationProtocol).getOrElse("")
+  }
+
+  /** Check if HTTP/2 was negotiated via ALPN.
+    *
+    * @return
+    *   true if "h2" was negotiated
+    */
+  def isHttp2: Boolean = getApplicationProtocol == "h2"
 
   /** Run the handshake state machine until complete.
     */
@@ -295,35 +321,42 @@ final class SSLSocketChannel private (
 
     log(s"write() called. src.remaining=${src.remaining()}")
 
-    var totalWritten = 0
+    // Synchronize writes to prevent TLS stream corruption when multiple threads
+    // write concurrently (e.g., HTTP/2 with multiple stream responses)
+    writeLock.lock()
+    try {
+      var totalWritten = 0
 
-    while src.hasRemaining do {
-      netOutBuffer.clear()
-      val result = engine.wrap(src, netOutBuffer)
+      while src.hasRemaining do {
+        netOutBuffer.clear()
+        val result = engine.wrap(src, netOutBuffer)
 
-      result.getStatus match {
-        case Status.OK =>
-          netOutBuffer.flip()
-          writeAll(netOutBuffer)
-          totalWritten += result.bytesConsumed()
-        case Status.BUFFER_OVERFLOW =>
-          // Network buffer too small - flush and retry
-          throw new IllegalStateException("Network buffer overflow during write")
-        case Status.BUFFER_UNDERFLOW =>
-          throw new IllegalStateException("Unexpected buffer underflow during write")
-        case Status.CLOSED =>
-          throw new java.io.IOException("SSLEngine closed")
+        result.getStatus match {
+          case Status.OK =>
+            netOutBuffer.flip()
+            writeAll(netOutBuffer)
+            totalWritten += result.bytesConsumed()
+          case Status.BUFFER_OVERFLOW =>
+            // Network buffer too small - flush and retry
+            throw new IllegalStateException("Network buffer overflow during write")
+          case Status.BUFFER_UNDERFLOW =>
+            throw new IllegalStateException("Unexpected buffer underflow during write")
+          case Status.CLOSED =>
+            throw new java.io.IOException("SSLEngine closed")
+        }
+
+        // Handle renegotiation if needed
+        if result.getHandshakeStatus != HandshakeStatus.NOT_HANDSHAKING &&
+          result.getHandshakeStatus != HandshakeStatus.FINISHED
+        then {
+          runHandshake()
+        }
       }
 
-      // Handle renegotiation if needed
-      if result.getHandshakeStatus != HandshakeStatus.NOT_HANDSHAKING &&
-        result.getHandshakeStatus != HandshakeStatus.FINISHED
-      then {
-        runHandshake()
-      }
+      totalWritten
+    } finally {
+      writeLock.unlock()
     }
-
-    totalWritten
   }
 
   /** Write all bytes from buffer to socket.
@@ -338,6 +371,28 @@ final class SSLSocketChannel private (
   /** Check if the channel is open.
     */
   override def isOpen: Boolean = socket.isOpen && !engine.isOutboundDone
+
+  /** Get the underlying socket for timeout control.
+    */
+  def underlyingSocket: java.net.Socket = socket.socket()
+
+  /** Check if there is buffered data available to read without blocking.
+    *
+    * This checks the application input buffer that holds decrypted data.
+    */
+  def hasBufferedData: Boolean = appInBuffer.hasRemaining
+
+  /** Check if there's pending network data that hasn't been decrypted yet.
+    *
+    * This checks both the network input buffer (encrypted data already read from socket) and the
+    * kernel socket buffer (encrypted data not yet read).
+    */
+  def hasPendingNetworkData: Boolean = {
+    netInBuffer.hasRemaining || {
+      try socket.socket().getInputStream.available() > 0
+      catch { case _: Exception => false }
+    }
+  }
 
   /** Close the TLS channel.
     *
@@ -379,12 +434,19 @@ object SSLSocketChannel {
     * @return
     *   SSLSocketChannel ready for handshake
     */
+  /** ALPN protocols for HTTP/2 with HTTP/1.1 fallback. */
+  val Http2Protocols: Array[String] = Array("h2", "http/1.1")
+
+  /** ALPN protocols for HTTP/1.1 only. */
+  val Http1Protocols: Array[String] = Array("http/1.1")
+
   def client(
     socket: SocketChannel,
     context: SSLContext,
     host: String,
     port: Int,
-    verifyHostname: Boolean = true
+    verifyHostname: Boolean = true,
+    alpnProtocols: Array[String] = Http2Protocols
   ): SSLSocketChannel = {
     val engine = context.createSSLEngine(host, port)
     engine.setUseClientMode(true)
@@ -401,6 +463,11 @@ object SSLSocketChannel {
       params.setEndpointIdentificationAlgorithm("HTTPS")
     }
 
+    // Enable ALPN (Application-Layer Protocol Negotiation) for HTTP/2
+    if alpnProtocols.nonEmpty then {
+      params.setApplicationProtocols(alpnProtocols)
+    }
+
     engine.setSSLParameters(params)
 
     new SSLSocketChannel(socket, engine)
@@ -412,15 +479,25 @@ object SSLSocketChannel {
     *   Accepted TCP socket from client
     * @param context
     *   SSL context configured with server certificate and key
+    * @param alpnProtocols
+    *   ALPN protocols to offer (empty array disables ALPN)
     * @return
     *   SSLSocketChannel ready for handshake
     */
   def server(
     socket: SocketChannel,
-    context: SSLContext
+    context: SSLContext,
+    alpnProtocols: Array[String] = Http2Protocols
   ): SSLSocketChannel = {
     val engine = context.createSSLEngine()
     engine.setUseClientMode(false)
+
+    // Configure ALPN for server
+    if alpnProtocols.nonEmpty then {
+      val params = engine.getSSLParameters
+      params.setApplicationProtocols(alpnProtocols)
+      engine.setSSLParameters(params)
+    }
 
     new SSLSocketChannel(socket, engine)
   }

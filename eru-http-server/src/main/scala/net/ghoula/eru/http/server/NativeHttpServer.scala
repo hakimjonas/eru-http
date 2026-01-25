@@ -10,6 +10,7 @@ import scala.annotation.unused
 
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
+import net.ghoula.eru.http.h2.{H2Error, H2ServerConnection}
 import net.ghoula.eru.prelude.*
 
 /** Native HTTP server implementation using blocking NIO + Virtual Threads.
@@ -144,14 +145,28 @@ private[server] final class NativeHttpServer(
     */
   private def handleClient(socket: SocketChannel): Eru[HttpError, Unit] = {
     val clientEffect = for {
-      // Wrap with TLS if configured
-      secureSocket <- sslContext match {
-        case Some(ctx) => wrapWithTLS(socket, ctx)
-        case None => Eru.succeed(socket)
+      // Wrap with TLS if configured, and check for HTTP/2 via ALPN
+      channelAndProtocol <- sslContext match {
+        case Some(ctx) =>
+          wrapWithTLS(socket, ctx).map { sslChannel =>
+            (sslChannel: ReadableByteChannel & WritableByteChannel, sslChannel.isHttp2, Some(sslChannel))
+          }
+        case None =>
+          Eru.succeed((socket: ReadableByteChannel & WritableByteChannel, false, Option.empty[SSLSocketChannel]))
       }
 
-      // Handle requests in a loop for keep-alive
-      _ <- handleRequestLoop(secureSocket)
+      (channel, isHttp2, maybeSslChannel) = channelAndProtocol
+
+      // Route to appropriate protocol handler
+      _ <-
+        if isHttp2 then {
+          maybeSslChannel match {
+            case Some(ssl) => handleHttp2Connection(ssl)
+            case None => handleRequestLoop(channel) // Should not happen, HTTP/2 requires TLS
+          }
+        } else {
+          handleRequestLoop(channel)
+        }
 
     } yield ()
 
@@ -162,6 +177,135 @@ private[server] final class NativeHttpServer(
     }.attempt.map(_ => ())
 
     clientEffect.attempt.flatMap { _ => cleanup }
+  }
+
+  /** Handle an HTTP/2 connection.
+    *
+    * Uses H2ServerConnection to process HTTP/2 frames and handle requests.
+    */
+  private def handleHttp2Connection(channel: SSLSocketChannel): Eru[HttpError, Unit] = {
+    // Accept the HTTP/2 connection (exchange preface)
+    H2ServerConnection.accept(channel).mapError(h2ErrorToHttpError).flatMap { h2conn =>
+      // Handle requests in a loop
+      def loop(): Eru[HttpError, Unit] = {
+        h2conn
+          .receiveRequest()
+          .mapError(h2ErrorToHttpError)
+          .flatMap { case (streamId, h2Headers, body) =>
+            // Convert HTTP/2 request to eru-http Request
+            convertH2RequestToRequest(h2Headers, body).flatMap { request =>
+              // Execute the handler
+              handler(request).attempt.flatMap { handlerResult =>
+                val response = handlerResult match {
+                  case Result.Success(resp) => resp
+                  case Result.Failure(httpError: HttpError) => errorToResponse(httpError)
+                }
+
+                // Convert response to HTTP/2 and send
+                val statusCode = response.status.value
+                val responseHeaders = response.headers.toList.map { case (name, value) => (name.toLowerCase, value) }
+
+                // Get response body bytes
+                val bodyBytes = response.body match {
+                  case Body.Empty => None
+                  case Body.Text(text, _, charset) => Some(text.getBytes(charset.toJavaCharset))
+                  case Body.Binary(bytes, _) => Some(bytes.toArray)
+                  case Body.Stream(_, _, _) => None // TODO: Support streaming in HTTP/2
+                }
+
+                h2conn.sendResponse(streamId, statusCode, responseHeaders, bodyBytes).mapError(h2ErrorToHttpError)
+              }
+            }
+          }
+          .attempt
+          .flatMap {
+            case Result.Success(_) =>
+              // Request handled successfully, continue if connection is still usable
+              h2conn.connection.isGoingAway.flatMap { goingAway =>
+                if goingAway then Eru.unit
+                else loop()
+              }
+            case Result.Failure(_) =>
+              // Connection closed or error, exit cleanly
+              Eru.unit
+          }
+      }
+
+      loop()
+    }
+  }
+
+  /** Convert HTTP/2 headers to eru-http Request. */
+  private def convertH2RequestToRequest(
+    h2Headers: List[(String, String)],
+    body: Option[Array[Byte]]
+  ): Eru[HttpError, Request[Body]] = {
+    val headerMap = h2Headers.toMap
+
+    for {
+      // Extract pseudo-headers (required)
+      methodStr <- Eru.fromOption(
+        headerMap.get(":method"),
+        HttpError.ProtocolError("Missing :method pseudo-header", "RFC 9113 Section 8.3.1")
+      )
+      pathStr <- Eru.fromOption(
+        headerMap.get(":path"),
+        HttpError.ProtocolError("Missing :path pseudo-header", "RFC 9113 Section 8.3.1")
+      )
+      schemeStr <- Eru.fromOption(
+        headerMap.get(":scheme"),
+        HttpError.ProtocolError("Missing :scheme pseudo-header", "RFC 9113 Section 8.3.1")
+      )
+      authority = headerMap.get(":authority")
+
+      // Parse method
+      method <- Method.parse(methodStr).mapError(e => HttpError.InvalidMethod(e))
+
+      // Build URI from pseudo-headers
+      uriStr = authority match {
+        case Some(host) => s"$schemeStr://$host$pathStr"
+        case None => pathStr // Relative URI
+      }
+      uri <- Uri.parse(uriStr).mapError(e => HttpError.InvalidUri(e))
+
+      // Build headers (filter out pseudo-headers)
+      regularHeaders = h2Headers.filter { case (name, _) => !name.startsWith(":") }
+      headers <- regularHeaders.foldLeft(Eru.succeed(Headers.empty): Eru[HttpError, Headers]) {
+        case (acc, (name, value)) =>
+          acc.flatMap(_.add(name, value).mapError(e => HttpError.ProtocolError(s"Invalid header: $e", "RFC 9113")))
+      }
+
+      // Build body
+      requestBody: Body = body match {
+        case Some(bytes) if bytes.nonEmpty => Body.Binary(Bytes.fromArray(bytes), None)
+        case _ => Body.Empty
+      }
+
+    } yield Request(method, uri, headers, requestBody, HttpVersion.HTTP_2_0)
+  }
+
+  /** Convert H2Error to HttpError. */
+  private def h2ErrorToHttpError(error: H2Error): HttpError = error match {
+    case H2Error.ConnectionError(code, msg) =>
+      HttpError.ProtocolError(s"HTTP/2 connection error ($code): ${msg.getOrElse("unknown")}", "RFC 9113")
+    case H2Error.StreamError(streamId, code, msg) =>
+      HttpError.ProtocolError(s"HTTP/2 stream $streamId error ($code): ${msg.getOrElse("unknown")}", "RFC 9113")
+    case H2Error.FlowControlViolation(streamId, msg) =>
+      HttpError.ProtocolError(s"HTTP/2 flow control violation on stream $streamId: $msg", "RFC 9113 Section 5.2")
+    case H2Error.StreamStateViolation(streamId, msg) =>
+      HttpError.ProtocolError(s"HTTP/2 stream state violation on stream $streamId: $msg", "RFC 9113 Section 5.1")
+    case H2Error.ProtocolViolation(msg, _) =>
+      HttpError.ProtocolError(s"HTTP/2 protocol violation: $msg", "RFC 9113")
+    case H2Error.InvalidPreface(msg) =>
+      HttpError.ProtocolError(s"Invalid HTTP/2 connection preface: $msg", "RFC 9113 Section 3.4")
+    case H2Error.InvalidFrame(msg, rfc) =>
+      HttpError.ProtocolError(s"HTTP/2 frame error: $msg", rfc)
+    case H2Error.CompressionError(msg) =>
+      HttpError.ProtocolError(s"HTTP/2 compression error: $msg", "RFC 7541")
+    case H2Error.SettingsError(msg) =>
+      HttpError.ProtocolError(s"HTTP/2 settings error: $msg", "RFC 9113 Section 6.5")
+    case H2Error.NetworkError(msg, cause) =>
+      HttpError.NetworkError(s"HTTP/2 network error: $msg", cause)
   }
 
   /** Handle requests in a loop for HTTP keep-alive support.
@@ -358,14 +502,15 @@ private[server] final class NativeHttpServer(
   /** Wrap socket with TLS/SSL.
     *
     * Uses SSLEngine with blocking mode. The handshake blocks the Virtual Thread, which is efficient
-    * since VTs are cheap.
+    * since VTs are cheap. ALPN is used to negotiate HTTP/2 or HTTP/1.1.
     */
   private def wrapWithTLS(
     socket: SocketChannel,
     ctx: SSLContext
-  ): Eru[HttpError, ReadableByteChannel & WritableByteChannel] =
+  ): Eru[HttpError, SSLSocketChannel] =
     Eru.effect {
-      val sslChannel = SSLSocketChannel.server(socket, ctx)
+      // Enable HTTP/2 negotiation via ALPN
+      val sslChannel = SSLSocketChannel.server(socket, ctx, SSLSocketChannel.Http2Protocols)
       sslChannel.doHandshake()
       sslChannel
     }.mapError(e => HttpError.NetworkError(s"TLS handshake failed: ${e.getMessage}", Some(e)))

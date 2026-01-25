@@ -6,6 +6,7 @@ import javax.net.ssl.SSLContext
 
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
+import net.ghoula.eru.http.h2.{H2ClientConnection, H2Error}
 import net.ghoula.eru.prelude.*
 
 /** Native HTTP client implementation using blocking NIO + Virtual Threads.
@@ -173,51 +174,185 @@ private[client] final class NativeHttpClient(
     }
   }
 
+  // Type alias for channels that support both reading and writing
+  private type RWChannel = java.nio.channels.ReadableByteChannel & java.nio.channels.WritableByteChannel
+
   /** Use a pooled connection for a single request/response cycle.
+    *
+    * Routes to HTTP/2 or HTTP/1.1 based on ALPN negotiation result.
     */
   private def useConnection(
     conn: PooledConnection,
     request: Request[Body]
   ): Eru[HttpError, Response[Bytes]] = {
     for {
-      // Get or create TLS channel if needed
-      secureSocket <-
+      // Get or create TLS channel if needed, and detect HTTP/2
+      channelAndProtocol <-
         if request.uri.scheme.contains("https") then {
           sslContext match {
             case Some(ctx) =>
               // Check if we already have an SSL channel for this connection (reuse!)
               pool.getSSLChannel(conn).flatMap {
                 case Some(existingChannel) =>
-                  // Reuse existing TLS session
-                  Eru.succeed(existingChannel)
+                  // Reuse existing TLS session - check if it negotiated HTTP/2
+                  Eru.succeed((existingChannel: RWChannel, existingChannel.isHttp2))
                 case None =>
                   // First HTTPS request on this connection - create and store SSL channel
                   wrapWithTLS(conn.socket, request.uri.host.getOrElse(""), conn.port, ctx).flatMap { newChannel =>
-                    pool.setSSLChannel(conn, newChannel).map(_ => newChannel)
+                    pool.setSSLChannel(conn, newChannel).map(_ => (newChannel: RWChannel, newChannel.isHttp2))
                   }
               }
             case None => Eru.fail(HttpError.NetworkError("HTTPS requested but no SSL context configured", None))
           }
         } else {
-          Eru.succeed(conn.socket)
+          // Plain HTTP - always HTTP/1.1
+          Eru.succeed((conn.socket: RWChannel, false))
         }
 
-      // Add cookies from jar
-      requestWithCookies <- config.cookieJar match {
-        case Some(jar) =>
-          jar.getCookies(request.uri).flatMap { cookies =>
-            if cookies.nonEmpty then {
-              val cookieHeader = cookies.map(_.toCookieHeader).mkString("; ")
-              request.headers
-                .add(HeaderNames.Cookie, cookieHeader)
-                .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid cookie: $e", "RFC 6265")))
-                .map(newHeaders => request.copy(headers = newHeaders))
-            } else {
-              Eru.succeed(request)
-            }
-          }
-        case None => Eru.succeed(request)
+      (channel, isHttp2) = channelAndProtocol
+
+      // Route to appropriate protocol handler based on ALPN result
+      response <- channel match {
+        case ssl: SSLSocketChannel if isHttp2 =>
+          useH2Connection(conn, request, ssl)
+        case _ =>
+          useHttp1Connection(conn, request, channel)
       }
+    } yield response
+  }
+
+  /** Use HTTP/2 for the request/response cycle.
+    *
+    * Handles connection preface exchange on first use, then sends request and receives response.
+    */
+  private def useH2Connection(
+    conn: PooledConnection,
+    request: Request[Body],
+    sslChannel: SSLSocketChannel
+  ): Eru[HttpError, Response[Bytes]] = {
+    for {
+      // Get or create H2ClientConnection
+      h2conn <- pool.getH2Connection(conn).flatMap {
+        case Some(existingH2) =>
+          Eru.succeed(existingH2)
+        case None =>
+          // First HTTP/2 request - create connection and exchange preface
+          H2ClientConnection
+            .connect(sslChannel)
+            .mapError(h2ErrorToHttpError)
+            .flatMap { newH2 =>
+              pool.setH2Connection(conn, newH2).map(_ => newH2)
+            }
+      }
+
+      // Add cookies from jar
+      requestWithCookies <- addCookiesIfNeeded(request)
+
+      // Build request parameters
+      method = request.method.value
+      host = request.uri.host.getOrElse("localhost")
+      port = request.uri.port.map(_.value).getOrElse(if request.uri.scheme.contains("https") then 443 else 80)
+      authority = if port == 443 || port == 80 then host else s"$host:$port"
+      scheme = request.uri.scheme.getOrElse("https")
+      path = {
+        val p = request.uri.path
+        val pathStr = if p.isEmpty then "/" else p
+        request.uri.query.map(q => s"$pathStr?$q").getOrElse(pathStr)
+      }
+
+      // Convert headers for HTTP/2:
+      // - Filter out Host (replaced by :authority pseudo-header)
+      // - Filter out connection-specific headers (forbidden in HTTP/2 per RFC 9113 Section 8.2.2)
+      headers = requestWithCookies.headers.toList.filter { case (name, _) =>
+        val nameLower = name.toLowerCase
+        nameLower != "host" &&
+        nameLower != "connection" &&
+        nameLower != "keep-alive" &&
+        nameLower != "proxy-connection" &&
+        nameLower != "transfer-encoding" &&
+        nameLower != "upgrade"
+      }.map { case (name, value) => (name.toLowerCase, value) }
+
+      // Convert body to bytes
+      bodyBytes <- requestWithCookies.body match {
+        case Body.Empty => Eru.succeed(Option.empty[Array[Byte]])
+        case Body.Text(text, _, charset) => Eru.succeed(Some(text.getBytes(charset.toJavaCharset)))
+        case Body.Binary(bytes, _) => Eru.succeed(Some(bytes.toArray))
+        case Body.Stream(_, _, _) =>
+          // TODO: Support streaming bodies for HTTP/2
+          Eru.fail(
+            HttpError.InvalidRequest(InvalidRequest("Streaming bodies not yet supported for HTTP/2", "RFC 9113"))
+          )
+      }
+
+      // Send request
+      streamId <- h2conn
+        .sendRequest(method, path, authority, scheme, headers, bodyBytes)
+        .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
+        .mapError {
+          case _: TimeoutException => HttpError.TimeoutError(s"H2 request timeout after ${config.requestTimeout}")
+          case e: H2Error => h2ErrorToHttpError(e)
+          case e: Throwable => HttpError.NetworkError(s"H2 request error: ${e.getMessage}", Some(e))
+        }
+
+      // Receive response
+      (responseHeaders, responseBody) <- h2conn
+        .receiveResponse(streamId)
+        .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
+        .mapError {
+          case _: TimeoutException => HttpError.TimeoutError(s"H2 response timeout after ${config.requestTimeout}")
+          case e: H2Error => h2ErrorToHttpError(e)
+          case e: Throwable => HttpError.NetworkError(s"H2 response error: ${e.getMessage}", Some(e))
+        }
+
+      // Parse :status pseudo-header
+      statusValue <- Eru.fromOption(
+        responseHeaders.find(_._1 == ":status").map(_._2),
+        HttpError.ProtocolError("Missing :status pseudo-header in HTTP/2 response", "RFC 9113 Section 8.3.2")
+      )
+      statusInt <- Eru.fromOption(
+        statusValue.toIntOption,
+        HttpError.ProtocolError(s"Invalid :status value: $statusValue", "RFC 9113 Section 8.3.2")
+      )
+      statusCode <- StatusCode(statusInt).mapError(e =>
+        HttpError.ProtocolError(s"Invalid status code $statusInt: ${e.reason}", "RFC 9113 Section 8.3.2")
+      )
+
+      // Convert headers (filter out pseudo-headers)
+      httpHeaders <- responseHeaders.filter { case (name, _) => !name.startsWith(":") }
+        .foldLeft(Eru.succeed(Headers.empty): Eru[HttpError, Headers]) { case (acc, (name, value)) =>
+          acc.flatMap(_.add(name, value).mapError(e => HttpError.ProtocolError(s"Invalid header: $e", "RFC 9113")))
+        }
+
+      // Build response
+      bodyBytes = responseBody.getOrElse(Array.empty[Byte])
+      response = Response(
+        status = statusCode,
+        headers = httpHeaders,
+        body = Body.Binary(Bytes.fromArray(bodyBytes), None),
+        version = HttpVersion.HTTP_2_0
+      )
+
+      // Automatically decompress response if enabled
+      decompressedResponse <-
+        if config.automaticDecompression then decompressResponse(response)
+        else Eru.succeed(response)
+
+      // Convert body to Bytes
+      responseBytes <- convertBodyToBytes(decompressedResponse)
+
+    } yield responseBytes
+  }
+
+  /** Use HTTP/1.1 for the request/response cycle. */
+  private def useHttp1Connection(
+    conn: PooledConnection,
+    request: Request[Body],
+    channel: RWChannel
+  ): Eru[HttpError, Response[Bytes]] = {
+    for {
+      // Add cookies from jar
+      requestWithCookies <- addCookiesIfNeeded(request)
 
       // Add Content-Length header if not present and body is not empty
       requestWithContentLength <-
@@ -251,7 +386,7 @@ private[client] final class NativeHttpClient(
 
       // Write request with timeout using connection's buffer
       _ <- HttpWriter
-        .writeRequestWithBuffer(secureSocket, requestWithContentLength, buffer)
+        .writeRequestWithBuffer(channel, requestWithContentLength, buffer)
         .timeout(java.time.Duration.ofMillis(config.requestTimeout.toMillis))
         .mapError {
           case _: TimeoutException => HttpError.TimeoutError(s"Write timeout after ${config.requestTimeout}")
@@ -268,7 +403,7 @@ private[client] final class NativeHttpClient(
               Eru.succeed(existingReader)
             case None =>
               // First HTTPS request - create and store SSL reader
-              val newReader = new BufferedSocketReader(secureSocket)
+              val newReader = new BufferedSocketReader(channel)
               pool.setSSLReader(conn, newReader).map(_ => newReader)
           }
         } else {
@@ -295,6 +430,49 @@ private[client] final class NativeHttpClient(
       responseBytes <- convertBodyToBytes(decompressedResponse)
 
     } yield responseBytes
+  }
+
+  /** Add cookies from cookie jar if configured. */
+  private def addCookiesIfNeeded(request: Request[Body]): Eru[HttpError, Request[Body]] = {
+    config.cookieJar match {
+      case Some(jar) =>
+        jar.getCookies(request.uri).flatMap { cookies =>
+          if cookies.nonEmpty then {
+            val cookieHeader = cookies.map(_.toCookieHeader).mkString("; ")
+            request.headers
+              .add(HeaderNames.Cookie, cookieHeader)
+              .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid cookie: $e", "RFC 6265")))
+              .map(newHeaders => request.copy(headers = newHeaders))
+          } else {
+            Eru.succeed(request)
+          }
+        }
+      case None => Eru.succeed(request)
+    }
+  }
+
+  /** Convert H2Error to HttpError. */
+  private def h2ErrorToHttpError(e: H2Error): HttpError = e match {
+    case H2Error.ConnectionError(code, msg) =>
+      HttpError.ProtocolError(s"HTTP/2 connection error ($code): ${msg.getOrElse("")}", "RFC 9113")
+    case H2Error.StreamError(streamId, code, msg) =>
+      HttpError.ProtocolError(s"HTTP/2 stream $streamId error ($code): ${msg.getOrElse("")}", "RFC 9113")
+    case H2Error.InvalidFrame(msg, _) =>
+      HttpError.ProtocolError(s"HTTP/2 invalid frame: $msg", "RFC 9113")
+    case H2Error.InvalidPreface(msg) =>
+      HttpError.ProtocolError(s"HTTP/2 invalid preface: $msg", "RFC 9113 Section 3.4")
+    case H2Error.FlowControlViolation(_, msg) =>
+      HttpError.ProtocolError(s"HTTP/2 flow control error: $msg", "RFC 9113 Section 5.2")
+    case H2Error.StreamStateViolation(streamId, msg) =>
+      HttpError.ProtocolError(s"HTTP/2 stream $streamId state error: $msg", "RFC 9113 Section 5.1")
+    case H2Error.SettingsError(msg) =>
+      HttpError.ProtocolError(s"HTTP/2 settings error: $msg", "RFC 9113 Section 6.5")
+    case H2Error.CompressionError(msg) =>
+      HttpError.ProtocolError(s"HTTP/2 compression error: $msg", "RFC 7541")
+    case H2Error.ProtocolViolation(msg, code) =>
+      HttpError.ProtocolError(s"HTTP/2 protocol violation ($code): $msg", "RFC 9113")
+    case H2Error.NetworkError(msg, cause) =>
+      HttpError.NetworkError(s"HTTP/2 network error: $msg", cause)
   }
 
   /** Automatically decompress response body based on Content-Encoding header.

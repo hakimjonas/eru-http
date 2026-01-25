@@ -11,6 +11,7 @@ import scala.concurrent.duration.*
 import net.ghoula.eru.*
 import net.ghoula.eru.http.*
 import net.ghoula.eru.http.SSLSocketChannel
+import net.ghoula.eru.http.h2.H2ClientConnection
 import net.ghoula.eru.prelude.*
 
 /** Opaque type for host:port connection keys.
@@ -193,6 +194,31 @@ trait ConnectionPool {
     */
   def setSSLReader(conn: PooledConnection, reader: BufferedSocketReader): Eru[HttpError, Unit]
 
+  /** Get an existing HTTP/2 connection for a socket, if one was previously created.
+    *
+    * For HTTP/2 connections, the H2ClientConnection must be reused across requests to maintain
+    * stream state and HPACK encoder/decoder context.
+    *
+    * @param conn
+    *   the connection to check
+    * @return
+    *   an effect that yields Some(h2conn) if exists, None otherwise
+    */
+  def getH2Connection(conn: PooledConnection): Eru[HttpError, Option[H2ClientConnection]]
+
+  /** Store an HTTP/2 connection for a socket.
+    *
+    * Called after HTTP/2 connection preface exchange completes.
+    *
+    * @param conn
+    *   the connection
+    * @param h2conn
+    *   the HTTP/2 connection to store
+    * @return
+    *   an effect that completes when stored
+    */
+  def setH2Connection(conn: PooledConnection, h2conn: H2ClientConnection): Eru[HttpError, Unit]
+
   /** Shutdown the pool and close all connections.
     *
     * After shutdown, the pool cannot be used.
@@ -261,6 +287,10 @@ private[client] final class NativeConnectionPool(
   // SSL reader management: per-socket BufferedSocketReaders that wrap SSLSocketChannel
   // Separate from regular readers because they read from SSLSocketChannel, not raw socket
   private val sslReaders = new java.util.concurrent.ConcurrentHashMap[SocketChannel, BufferedSocketReader]()
+
+  // HTTP/2 connection management: per-socket H2ClientConnection for HTTP/2 multiplexing
+  // Must be preserved across requests to maintain stream state and HPACK context
+  private val h2Connections = new java.util.concurrent.ConcurrentHashMap[SocketChannel, H2ClientConnection]()
 
   def acquire(host: String, port: Int): Eru[HttpError, PooledConnection] = {
     for {
@@ -434,9 +464,28 @@ private[client] final class NativeConnectionPool(
     }.mapError(e => HttpError.NetworkError(s"Failed to set SSL reader: ${e.getMessage}", Some(e)))
   }
 
+  def getH2Connection(conn: PooledConnection): Eru[HttpError, Option[H2ClientConnection]] = {
+    Eru.effect {
+      Option(h2Connections.get(conn.socket))
+    }.mapError(e => HttpError.NetworkError(s"Failed to get H2 connection: ${e.getMessage}", Some(e)))
+  }
+
+  def setH2Connection(conn: PooledConnection, h2conn: H2ClientConnection): Eru[HttpError, Unit] = {
+    Eru.effect {
+      h2Connections.put(conn.socket, h2conn)
+      ()
+    }.mapError(e => HttpError.NetworkError(s"Failed to set H2 connection: ${e.getMessage}", Some(e)))
+  }
+
   def remove(conn: PooledConnection): Eru[HttpError, Unit] = {
     for {
-      // Close SSL channel first if exists (sends TLS close_notify)
+      // Shutdown HTTP/2 connection if exists (sends GOAWAY)
+      _ <- Eru.effect {
+        Option(h2Connections.remove(conn.socket)).foreach { h2conn =>
+          h2conn.shutdown().attempt.unsafeRunSync(): Unit
+        }
+      }.mapError(e => HttpError.NetworkError(s"Failed to shutdown H2 connection: ${e.getMessage}", Some(e)))
+      // Close SSL channel if exists (sends TLS close_notify)
       _ <- Eru.effect {
         Option(sslChannels.remove(conn.socket)).foreach(_.close())
       }.mapError(e => HttpError.NetworkError(s"Failed to close SSL channel: ${e.getMessage}", Some(e)))
@@ -475,7 +524,14 @@ private[client] final class NativeConnectionPool(
     for {
       state <- stateRef.get
       allConns = collectAllConnections(state)
-      // Close SSL channels first (sends TLS close_notify)
+      // Shutdown HTTP/2 connections first (sends GOAWAY)
+      _ <- Eru.effect {
+        h2Connections.values().forEach { h2conn =>
+          h2conn.shutdown().attempt.unsafeRunSync(): Unit
+        }
+        h2Connections.clear()
+      }.mapError(e => HttpError.NetworkError(s"Failed to shutdown H2 connections: ${e.getMessage}", Some(e)))
+      // Close SSL channels (sends TLS close_notify)
       _ <- Eru.effect {
         sslChannels.values().forEach(_.close())
         sslChannels.clear()

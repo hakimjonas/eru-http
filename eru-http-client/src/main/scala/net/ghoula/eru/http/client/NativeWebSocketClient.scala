@@ -84,7 +84,15 @@ private[client] final class NativeWebSocketClient(
     port: Int
   ): Eru[WebSocketError | HttpError, ReadableByteChannel & WritableByteChannel] = {
     Eru.effect {
-      val sslChannel = SSLSocketChannel.client(socket, sslContext, host, port)
+      // WebSocket upgrade requires HTTP/1.1, so we explicitly request HTTP/1.1 only via ALPN
+      val sslChannel = SSLSocketChannel.client(
+        socket,
+        sslContext,
+        host,
+        port,
+        verifyHostname = true,
+        alpnProtocols = SSLSocketChannel.Http1Protocols
+      )
       sslChannel.doHandshake()
       sslChannel
     }.mapError { e =>

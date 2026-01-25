@@ -61,50 +61,53 @@ From RFC 9113 Section 5.2:
 
 ## Implementation Phases
 
-### Phase 1: HPACK (Header Compression)
+### Phase 1: HPACK (Header Compression) ✅ COMPLETE
 
 **Files**:
 ```
 eru-http-core/jvm/src/main/scala/net/ghoula/eru/http/h2/
   HpackStaticTable.scala    # 61 predefined entries per RFC 7541
   HpackDynamicTable.scala   # FIFO bounded table
-  HpackHuffman.scala        # Static Huffman codec (256 symbols + EOS)
+  HpackHuffman.scala        # Static Huffman codec (257 symbols: 0-255 + EOS)
   HpackInteger.scala        # Variable-length integer encoding
+  HpackString.scala         # String literal encoding (auto Huffman selection)
   HpackEncoder.scala        # Encodes headers to binary
   HpackDecoder.scala        # Decodes binary to headers
+  HpackError.scala          # Typed error enum with RFC references
 ```
 
 **Components per RFC 7541**:
 - Static table: 61 entries (`:authority`, `:method GET`, etc.)
 - Dynamic table: Bounded FIFO, default 4096 bytes
-- Huffman encoding: Optional, 5-8 bits per symbol
+- Huffman encoding: Optional, 5-30 bits per symbol (257 symbols)
 - Integer encoding: Variable length with N-bit prefix
 
-**Estimate**: Unknown until prototyped. http4s uses external library so no reference.
+**Status**: Complete. 89 tests pass including RFC 7541 Appendix C test vectors. All components return `Eru[HpackError, A]` for proper effect integration.
 
-### Phase 2: Frame Layer
+### Phase 2: Frame Layer ✅ COMPLETE
 
 **Files**:
 ```
 eru-http-core/jvm/src/main/scala/net/ghoula/eru/http/h2/
-  H2Frame.scala             # Frame types and parsing
-  H2FrameParser.scala       # Parse from BufferedSocketReader
-  H2FrameWriter.scala       # Write to channel
+  H2Frame.scala             # Frame types and structures (all 10 frame types)
+  H2FrameCodec.scala        # Frame encoding/decoding from ByteBuffer
+  H2Error.scala             # Error types with RFC references
+  H2ErrorCode.scala         # HTTP/2 error codes per RFC 9113
 ```
 
 **Frame Types (RFC 9113)**:
-| Type | Code | Purpose |
-|------|------|---------|
-| DATA | 0x00 | Message body |
-| HEADERS | 0x01 | Opens stream, carries headers |
-| PRIORITY | 0x02 | Deprecated in RFC 9113 |
-| RST_STREAM | 0x03 | Terminates stream |
-| SETTINGS | 0x04 | Connection parameters |
-| PUSH_PROMISE | 0x05 | Server push |
-| PING | 0x06 | Liveness check |
-| GOAWAY | 0x07 | Graceful shutdown |
-| WINDOW_UPDATE | 0x08 | Flow control |
-| CONTINUATION | 0x09 | Header continuation |
+| Type | Code | Purpose | Status |
+|------|------|---------|--------|
+| DATA | 0x00 | Message body | ✅ |
+| HEADERS | 0x01 | Opens stream, carries headers | ✅ |
+| PRIORITY | 0x02 | Deprecated in RFC 9113 | ✅ |
+| RST_STREAM | 0x03 | Terminates stream | ✅ |
+| SETTINGS | 0x04 | Connection parameters | ✅ |
+| PUSH_PROMISE | 0x05 | Server push | ✅ |
+| PING | 0x06 | Liveness check | ✅ |
+| GOAWAY | 0x07 | Graceful shutdown | ✅ |
+| WINDOW_UPDATE | 0x08 | Flow control | ✅ |
+| CONTINUATION | 0x09 | Header continuation | ✅ |
 
 **Frame Header** (9 bytes):
 ```
@@ -117,15 +120,17 @@ eru-http-core/jvm/src/main/scala/net/ghoula/eru/http/h2/
 +-----------------------------------------------+
 ```
 
+**Status**: Complete. 27 tests covering all frame types, round-trip encoding/decoding, protocol validation (stream 0 restrictions, frame size limits), and unknown frame handling. Returns `Eru[H2Error, A]` for proper effect integration.
+
 **Reference**: http4s H2Frame.scala is 899 lines
 
-### Phase 3: Stream State Machine
+### Phase 3: Stream State Machine ✅ COMPLETE
 
 **Files**:
 ```
 eru-http-core/jvm/src/main/scala/net/ghoula/eru/http/h2/
-  H2Stream.scala            # Stream state and operations
-  H2StreamState.scala       # State enum
+  H2Stream.scala            # Stream state machine and flow control
+  H2StreamState.scala       # 7-state enum with helper methods
 ```
 
 **States (RFC 9113 Section 5.1)**:
@@ -139,49 +144,88 @@ eru-http-core/jvm/src/main/scala/net/ghoula/eru/http/h2/
 
 **Transitions**: Driven by HEADERS, PUSH_PROMISE, END_STREAM flag, RST_STREAM
 
+**Features**:
+- ✅ Full 7-state machine with all transitions
+- ✅ State validation for frame operations (canSend, canReceive)
+- ✅ Dual-level flow control (send/receive windows)
+- ✅ Window consumption and replenishment with overflow detection
+- ✅ Helper methods: canSendData, canReceiveData, isActive, isClosed, isReserved
+
+**Status**: Complete. 40 tests covering all state transitions, flow control operations, and frame validation. Returns `Eru[H2Error, A]` for proper effect integration.
+
 **Reference**: http4s H2Stream.scala is 507 lines
 
-### Phase 4: Connection Management
+### Phase 4: Connection Management ✅ COMPLETE
 
 **Files**:
 ```
 eru-http-core/jvm/src/main/scala/net/ghoula/eru/http/h2/
-  H2Connection.scala        # Connection state and multiplexing
-  H2Settings.scala          # SETTINGS parameters
-  H2FlowControl.scala       # Window management
+  H2Connection.scala        # Connection state and multiplexing (~380 lines)
+  H2Settings.scala          # SETTINGS parameters with validation (~250 lines)
 ```
 
 **Connection State**:
-- Stream map (id -> H2Stream)
-- Connection-level flow control window
-- HPACK encoder/decoder (stateful per connection)
-- Highest stream ID seen
-- SETTINGS (local and remote)
+- ✅ Stream map (id -> H2Stream)
+- ✅ Connection-level flow control windows (send/receive)
+- ✅ HPACK encoder/decoder per connection
+- ✅ Stream ID management (client odd, server even)
+- ✅ SETTINGS (local and peer) with validation
+- ✅ GOAWAY handling
+
+**Features**:
+- ✅ Client/server connection factories
+- ✅ Automatic stream ID allocation
+- ✅ Peer stream registration with validation
+- ✅ Max concurrent streams enforcement
+- ✅ Connection-level flow control
+- ✅ Settings application with delta window adjustment
+- ✅ GOAWAY send/receive with last stream ID tracking
 
 **Flow Control** (RFC 9113 Section 5.2):
 - Initial window: 65,535 bytes (connection and per-stream)
 - DATA frames consume from both windows
 - WINDOW_UPDATE replenishes
-- Must prevent deadlock: control frames bypass data backpressure
+- Overflow detection on window updates
+
+**Status**: Complete. 52 tests (23 H2Settings + 29 H2Connection) covering settings validation, stream management, flow control, and GOAWAY handling.
 
 **Reference**: http4s H2Connection.scala is 598 lines
 
-### Phase 5: Client Integration
+### Phase 5: Client Integration (IN PROGRESS)
 
 **Files**:
 ```
-eru-http-client/src/main/scala/net/ghoula/eru/http/client/
-  H2Client.scala            # HTTP/2 client
-  H2ClientConnection.scala  # Single H2 connection
+eru-http-core/jvm/src/main/scala/net/ghoula/eru/http/
+  SSLSocketChannel.scala    # Added ALPN support (h2, http/1.1)
+
+eru-http-core/jvm/src/main/scala/net/ghoula/eru/http/h2/
+  H2ClientConnection.scala  # HTTP/2 client connection handler (~500 lines)
+
+eru-http-core/jvm/src/test/scala/net/ghoula/eru/http/h2/
+  H2ClientConnectionSpec.scala  # 9 tests with mock channel
+  AlpnIntegrationSpec.scala     # 6 end-to-end ALPN tests with real TLS
 ```
 
-**Features**:
-- ALPN negotiation ("h2" protocol)
-- Connection preface (magic + SETTINGS)
-- Request multiplexing
-- Stream-per-request model
+**Completed**:
+- ✅ ALPN negotiation in SSLSocketChannel (client and server)
+- ✅ Protocol detection methods (getApplicationProtocol, isHttp2)
+- ✅ End-to-end ALPN verification with real TLS handshakes (6 tests)
+- ✅ H2ClientConnection with connection preface exchange
+- ✅ Frame reading/writing
+- ✅ Request sending with HPACK encoding
+- ✅ Response receiving with header/data handling
+- ✅ Flow control (WINDOW_UPDATE send/receive)
+- ✅ PING/PONG handling
+- ✅ GOAWAY handling
 
-**ALPN**: Use `SSLParameters.setApplicationProtocols(["h2", "http/1.1"])`
+**Test Coverage**: 15 tests (9 H2ClientConnectionSpec + 6 AlpnIntegrationSpec)
+
+**Remaining**:
+- ☐ Integrate with NativeHttpClient (protocol detection after TLS)
+- ☐ Connection pool HTTP/2 support (one connection, many streams)
+- ☐ End-to-end integration test with real HTTP/2 server
+
+**ALPN**: `SSLParameters.setApplicationProtocols(Array("h2", "http/1.1"))`
 
 **Reference**: http4s H2Client.scala is 427 lines
 

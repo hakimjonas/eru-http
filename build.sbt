@@ -51,6 +51,9 @@ ThisBuild / Test / fork := true // Enable fork to use javaOptions
 
 // JVM options for running servers (can be configured via environment variables for benchmarking)
 // Applies to all projects and all forked JVM tasks (run, Test / run, Test / runMain, test)
+//
+// IMPORTANT: This project requires ZGC (default). G1GC has known SIGSEGV crashes with
+// JDK 25 + Virtual Threads + heavy class loading. See .sbtopts for sbt's own JVM config.
 val jvmRunOptions = {
   // Read GC type from environment or system property (default: ZGC, which is generational by default in JDK 24+)
   val gcType = sys.env.getOrElse("GC_TYPE", sys.props.getOrElse("gc.type", "zgc"))
