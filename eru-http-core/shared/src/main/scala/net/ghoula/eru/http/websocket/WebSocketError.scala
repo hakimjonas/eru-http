@@ -127,4 +127,4 @@ enum WebSocketError {
 /** Exception wrapper for WebSocket errors.
   */
 final case class WebSocketException(message: String, cause: Option[Throwable] = None)
-    extends Exception(message, cause.orNull)
+    extends Exception(message, cause.getOrElse(null))

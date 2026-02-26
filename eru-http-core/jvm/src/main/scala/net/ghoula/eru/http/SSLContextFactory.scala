@@ -35,7 +35,7 @@ object SSLContextFactory {
 
     // scalafix:off DisableSyntax.null
     // Java SSLContext API requires null to mean "use defaults"
-    val trustManagers: Array[TrustManager] =
+    val trustManagers: Array[TrustManager] | Null =
       if config.trustAll then Array(TrustAllTrustManager)
       else null // Use default trust managers (system trust store)
 

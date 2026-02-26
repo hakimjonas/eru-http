@@ -276,6 +276,6 @@ object Compression {
     cause: Option[Throwable] = None
   ) extends Exception(
         hint.map(h => s"$message ($h)").getOrElse(message),
-        cause.orNull
+        cause.getOrElse(null)
       )
 }

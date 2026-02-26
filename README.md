@@ -1,7 +1,7 @@
 # eru-http
 
 [![CI](https://github.com/hakimjonas/eru-http/workflows/CI/badge.svg)](https://github.com/hakimjonas/eru-http/actions/workflows/ci.yml)
-[![Scala 3.7.3](https://img.shields.io/badge/scala-3.7.3-red.svg)](https://www.scala-lang.org/)
+[![Scala 3.8.2](https://img.shields.io/badge/scala-3.8.2-red.svg)](https://www.scala-lang.org/)
 [![Java 21](https://img.shields.io/badge/java-21-blue.svg)](https://openjdk.org/projects/jdk/21/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -523,7 +523,7 @@ See [BENCHMARKING.md](BENCHMARKING.md) for testing guide and [BENCHMARK_RESULTS.
 - ✅ Production-ready examples
 
 **Supported Platforms:**
-- ✅ JVM (Scala 3.7.3+)
+- ✅ JVM (Scala 3.8.2+)
 - ⏳ Scala.js (pending Eru JS support)
 - ⏳ Scala Native (pending Eru Native support)
 

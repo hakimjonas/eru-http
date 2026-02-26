@@ -235,4 +235,4 @@ enum H2Error {
 }
 
 /** Exception wrapper for HTTP/2 errors. */
-final case class H2Exception(message: String, cause: Option[Throwable] = None) extends Exception(message, cause.orNull)
+final case class H2Exception(message: String, cause: Option[Throwable] = None) extends Exception(message, cause.getOrElse(null))

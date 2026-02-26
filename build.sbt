@@ -35,7 +35,8 @@ ThisBuild / scalacOptions ++= Seq(
   "-new-syntax",
   "-no-indent",
   "-source:future",
-  "-release:21" // Target Java 21+ for Virtual Threads support
+  "-release:21", // Target Java 21+ for Virtual Threads support
+  "-Yexplicit-nulls"
 )
 
 // Java options - target Java 21 for Virtual Threads support
@@ -55,7 +56,7 @@ ThisBuild / Test / fork := true // Enable fork to use javaOptions
 // IMPORTANT: This project requires ZGC (default). G1GC has known SIGSEGV crashes with
 // JDK 25 + Virtual Threads + heavy class loading. See .sbtopts for sbt's own JVM config.
 val jvmRunOptions = {
-  // Read GC type from environment or system property (default: ZGC, which is generational by default in JDK 24+)
+  // Read GC type from environment or system property (default: ZGC generational, default in JDK 23+, explicit for JDK 21)
   val gcType = sys.env.getOrElse("GC_TYPE", sys.props.getOrElse("gc.type", "zgc"))
   val heapSize = sys.env.getOrElse("HEAP_SIZE", sys.props.getOrElse("heap.size", "2g"))
 
@@ -65,11 +66,11 @@ val jvmRunOptions = {
     case "g1" | "g1gc" =>
       Seq("-XX:+UseG1GC", "-server")
     case "zgc" | "zgc-gen" | "zgcgen" =>
-      // ZGC is generational by default in JDK 24+, no need for -XX:+ZGenerational
-      Seq("-XX:+UseZGC", "-server")
+      // ZGC generational is default in JDK 23+, explicit for JDK 21
+      Seq("-XX:+UseZGC", "-XX:+ZGenerational", "-server")
     case _ =>
-      // Default to ZGC (generational by default in JDK 24+)
-      Seq("-XX:+UseZGC", "-server")
+      // Default to ZGC generational (default in JDK 23+, explicit for JDK 21)
+      Seq("-XX:+UseZGC", "-XX:+ZGenerational", "-server")
   }
 
   gcOptions ++ Seq(
