@@ -31,3 +31,8 @@ benchmark-results/*.txt.summary
 
 # Autobahn test reports (generated)
 autobahn/reports/
+
+# JVM crash artifacts
+hs_err_pid*
+core.*
+*.semanticdb

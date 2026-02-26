@@ -83,7 +83,8 @@ private[server] final class NativeHttpServer(
     */
   private def acceptLoop(serverSocket: ServerSocketChannel): Eru[HttpError, Nothing] = {
     val acceptAndHandle = for {
-      clientSocket <- Eru.effect(serverSocket.accept())
+      clientSocket <- Eru
+        .effect(serverSocket.accept())
         .mapError(e => HttpError.NetworkError(s"Accept error: ${e.getMessage}", Some(e)))
       _ <- Eru.effect {
         // Configure client socket for blocking I/O on Virtual Thread
@@ -334,7 +335,8 @@ private[server] final class NativeHttpServer(
         // Add Connection and Content-Length headers
         response <- handlerResult match {
           case Result.Success(resp) => addConnectionHeader(request, resp)
-          case Result.Failure(httpError: HttpError) => errorToResponse(httpError).flatMap(addConnectionHeader(request, _))
+          case Result.Failure(httpError: HttpError) =>
+            errorToResponse(httpError).flatMap(addConnectionHeader(request, _))
         }
 
         // Check if this is a WebSocket upgrade response
@@ -465,7 +467,8 @@ private[server] final class NativeHttpServer(
         val requestConnection = request.headers.getFirst(HeaderNames.Connection).map(_.value.toLowerCase)
         val connectionValue = if requestConnection.contains("close") then "close" else "keep-alive"
 
-        resp.headers.add(HeaderNames.Connection, connectionValue)
+        resp.headers
+          .add(HeaderNames.Connection, connectionValue)
           .map(newHeaders => resp.copy(headers = newHeaders))
           .attempt
           .map {

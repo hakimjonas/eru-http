@@ -117,6 +117,14 @@ ThisBuild / credentials ++= {
   }
 }
 
+// Assembly merge strategy (applied to all subprojects)
+ThisBuild / assembly / assemblyMergeStrategy := {
+  case PathList("META-INF", "services", _*) => MergeStrategy.concat
+  case PathList("META-INF", _*)             => MergeStrategy.discard
+  case "scala-collection-compat.properties" => MergeStrategy.first
+  case _                                    => MergeStrategy.first
+}
+
 // Shared settings
 lazy val commonSettings = Seq(
   libraryDependencies ++= Seq(
@@ -216,12 +224,7 @@ lazy val benchmarks = (project in file("benchmarks"))
     description := "Standalone benchmark server for eru-http",
     publish / skip := true,
     assembly / assemblyJarName := "eru-http-benchmark-server.jar",
-    assembly / mainClass := Some("benchmarks.HttpBenchmarkServer"),
-    assembly / assemblyMergeStrategy := {
-      case PathList("META-INF", "services", _*) => MergeStrategy.concat
-      case PathList("META-INF", _*) => MergeStrategy.discard
-      case x => MergeStrategy.first
-    }
+    assembly / mainClass := Some("benchmarks.HttpBenchmarkServer")
   )
   .dependsOn(coreJVM, server)
 

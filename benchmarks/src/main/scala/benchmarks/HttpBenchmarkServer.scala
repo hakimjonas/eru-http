@@ -37,24 +37,30 @@ object HttpBenchmarkServer {
 
         case "/json" =>
           val json = """{"message":"Hello, World!"}"""
-          Eru.succeed(
-            Response(
-              status = StatusCode.Ok,
-              headers = Headers.empty.add("Content-Type", "application/json").unsafeRunSync(),
-              body = Body.Text(json, Some(MediaType.applicationJson))
-            )
-          )
+          Headers.empty
+            .add("Content-Type", "application/json")
+            .mapError(e => HttpError.InvalidRequest(InvalidRequest(e.toString, "")))
+            .map { headers =>
+              Response(
+                status = StatusCode.Ok,
+                headers = headers,
+                body = Body.Text(json, Some(MediaType.applicationJson))
+              )
+            }
 
         case "/json-large" =>
           // 1KB JSON response
           val json = """{"message":"Hello, World!","data":"""" + ("x" * 950) + """"}"""
-          Eru.succeed(
-            Response(
-              status = StatusCode.Ok,
-              headers = Headers.empty.add("Content-Type", "application/json").unsafeRunSync(),
-              body = Body.Text(json, Some(MediaType.applicationJson))
-            )
-          )
+          Headers.empty
+            .add("Content-Type", "application/json")
+            .mapError(e => HttpError.InvalidRequest(InvalidRequest(e.toString, "")))
+            .map { headers =>
+              Response(
+                status = StatusCode.Ok,
+                headers = headers,
+                body = Body.Text(json, Some(MediaType.applicationJson))
+              )
+            }
 
         case "/large-10kb" =>
           // 10KB text response
@@ -118,13 +124,16 @@ object HttpBenchmarkServer {
                   chunk
                 }
               }
-              Eru.succeed(
-                Response(
-                  status = StatusCode.Ok,
-                  headers = Headers.empty.add("X-Chunk-Count", "streaming").unsafeRunSync(),
-                  body = Body.Stream(transformedChunks, None)
-                )
-              )
+              Headers.empty
+                .add("X-Chunk-Count", "streaming")
+                .mapError(e => HttpError.InvalidRequest(InvalidRequest(e.toString, "")))
+                .map { headers =>
+                  Response(
+                    status = StatusCode.Ok,
+                    headers = headers,
+                    body = Body.Stream(transformedChunks, None)
+                  )
+                }
             case _ =>
               // Non-streaming body - just echo it back
               for {
