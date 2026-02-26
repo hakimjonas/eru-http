@@ -2,7 +2,7 @@ import Dependencies.*
 // import sbtcrossproject.CrossPlugin.autoImport.{crossProject, CrossType}
 // import org.scalajs.sbtplugin.ScalaJSPlugin.autoImport._
 
-ThisBuild / scalaVersion := "3.7.4"
+ThisBuild / scalaVersion := "3.8.2"
 ThisBuild / semanticdbEnabled := true
 ThisBuild / semanticdbVersion := scalafixSemanticdb.revision
 ThisBuild / organization := "net.ghoula"
@@ -24,7 +24,7 @@ ThisBuild / scalacOptions ++= Seq(
   "-feature",
   "-unchecked",
   "-deprecation",
-  "-Xfatal-warnings",
+  "-Werror",
   "-Wunused:all",
   "-Wvalue-discard",
   "-Wconf:any:warning",
@@ -156,7 +156,7 @@ lazy val coreJVM = (project in file("eru-http-core/jvm"))
       if (useLocalEru) {
         // Local development: no published dependencies needed, use local projects via dependsOn
         Seq(
-          "net.ghoula" % "valar-core_3" % "0.5.0",
+          "net.ghoula" % "valar-core_3" % "0.6.0",
           brotli4j
         )
       } else {
@@ -164,7 +164,7 @@ lazy val coreJVM = (project in file("eru-http-core/jvm"))
         Seq(
           "net.ghoula" % "eru-core_3" % eruVersion,
           "net.ghoula" % "eru-runtime_3" % eruVersion,
-          "net.ghoula" % "valar-core_3" % "0.5.0",
+          "net.ghoula" % "valar-core_3" % "0.6.0",
           brotli4j
         )
       }
@@ -218,7 +218,8 @@ lazy val benchmarks = (project in file("benchmarks"))
     assembly / assemblyJarName := "eru-http-benchmark-server.jar",
     assembly / mainClass := Some("benchmarks.HttpBenchmarkServer"),
     assembly / assemblyMergeStrategy := {
-      case PathList("META-INF", xs @ _*) => MergeStrategy.discard
+      case PathList("META-INF", "services", _*) => MergeStrategy.concat
+      case PathList("META-INF", _*) => MergeStrategy.discard
       case x => MergeStrategy.first
     }
   )

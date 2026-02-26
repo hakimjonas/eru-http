@@ -23,7 +23,7 @@ import net.ghoula.eru.prelude.*
   * SO_REUSEPORT Support (Linux 3.9+):
   *   - Multiple acceptor threads for multi-core scaling
   *   - Kernel-level load balancing across acceptors
-  *   - Each acceptor has its own ServerSocketChannel + Selector
+  *   - Each acceptor has its own blocking ServerSocketChannel on a Virtual Thread
   *   - Enabled automatically when acceptorThreads > 1
   *
   * Compare to NettyHttpServer: ~150 lines vs 332 lines (55% reduction)
@@ -43,7 +43,7 @@ private[server] final class NativeHttpServer(
     // Bind all server sockets
     _ <- Eru.effect {
       serverSockets.foreach { socket =>
-        socket.configureBlocking(false) // Non-blocking for Selector-based accept
+        socket.configureBlocking(true) // Blocking accept - efficient on Virtual Threads, no pinning
         socket.bind(new InetSocketAddress(config.host, config.port), config.backlog)
       }
     }.mapError(e => HttpError.NetworkError(s"Failed to bind server: ${e.getMessage}", Some(e)))
@@ -59,82 +59,53 @@ private[server] final class NativeHttpServer(
     }.mapError(e => HttpError.NetworkError(s"Failed to get address: ${e.getMessage}", Some(e)))
 
     // Start one accept loop per server socket (SO_REUSEPORT multi-threading)
-    // Use Thread.startVirtualThread directly to bypass Eru's effect system
-    // This ensures each accept loop runs on its own Virtual Thread immediately
-    _ <- Eru.effect {
-      serverSockets.foreach { socket =>
-        Thread.startVirtualThread(() => acceptLoop(socket).unsafeRunSync())
-      }
-    }.mapError(e => HttpError.NetworkError(s"Failed to start accept loops: ${e.getMessage}", Some(e)))
+    // Each loop runs as a daemon fiber on its own Virtual Thread
+    _ <- serverSockets.foldLeft[Eru[Nothing, Unit]](Eru.unit) { (acc, socket) =>
+      acc.flatMap(_ => runtime.forkDaemon(acceptLoop(socket)).map(_ => ()))
+    }
 
   } yield address
 
-  /** Accept loop - uses Selector for efficient non-blocking accept.
+  /** Accept loop - blocking accept on Virtual Thread.
     *
-    * Uses NIO Selector to wait for incoming connections efficiently, then dispatches each
-    * connection to its own Virtual Thread for handling. This avoids blocking on accept() and allows
-    * handling thousands of concurrent connection attempts.
+    * Uses blocking ServerSocketChannel.accept() which is efficient on Virtual Threads (no pinning).
+    * Each accepted connection is dispatched to its own daemon fiber for handling.
     *
     * With SO_REUSEPORT (acceptorThreads > 1), multiple instances of this loop run concurrently,
     * each with its own ServerSocketChannel bound to the same port. The kernel distributes incoming
     * connections across acceptors for multi-core scaling.
     *
+    * Shutdown: serverSocket.close() causes accept() to throw ClosedChannelException, cleanly
+    * terminating the loop.
+    *
     * @param serverSocket
     *   The server socket for this accept loop (unique per acceptor thread)
     */
-  private def acceptLoop(serverSocket: ServerSocketChannel): Eru[HttpError, Unit] = {
-    Eru.effect {
-      val selector = java.nio.channels.Selector.open()
-      serverSocket.register(selector, java.nio.channels.SelectionKey.OP_ACCEPT)
+  private def acceptLoop(serverSocket: ServerSocketChannel): Eru[HttpError, Nothing] = {
+    val acceptAndHandle = for {
+      clientSocket <- Eru.effect(serverSocket.accept())
+        .mapError(e => HttpError.NetworkError(s"Accept error: ${e.getMessage}", Some(e)))
+      _ <- Eru.effect {
+        // Configure client socket for blocking I/O on Virtual Thread
+        clientSocket.configureBlocking(true)
 
-      while running.get() do {
-        // Wait for events (blocks efficiently in kernel)
-        selector.select()
+        // Enable TCP_NODELAY to disable Nagle's algorithm (avoid 40ms delay)
+        clientSocket.setOption(java.net.StandardSocketOptions.TCP_NODELAY, java.lang.Boolean.TRUE)
 
-        // Process all ready keys
-        val keys = selector.selectedKeys().iterator()
-        while keys.hasNext() do {
-          val key = keys.next()
-          keys.remove()
-
-          if key.isAcceptable() then {
-            // Accept all pending connections
-            // scalafix:off DisableSyntax.null
-            // Java NIO accept() returns null in non-blocking mode when no connections pending
-            var clientSocket = serverSocket.accept()
-            while clientSocket != null do {
-              // scalafix:on DisableSyntax.null
-              // Configure socket
-              clientSocket.configureBlocking(true) // Client socket uses blocking mode on VT
-
-              // Enable TCP_NODELAY to disable Nagle's algorithm (avoid 40ms delay)
-              clientSocket.setOption(java.net.StandardSocketOptions.TCP_NODELAY, java.lang.Boolean.TRUE)
-
-              // Enable TCP_QUICKACK on Linux to avoid delayed ACK (avoid 40ms delay)
-              try {
-                clientSocket.setOption(ExtendedSocketOptions.TCP_QUICKACK, true)
-              } catch {
-                case _: Exception => () // TCP_QUICKACK not available on this platform
-              }
-
-              // Track active client for graceful shutdown
-              activeClients.put(clientSocket, java.lang.Boolean.TRUE)
-
-              // Dispatch to Virtual Thread immediately WITHOUT BLOCKING
-              // We're in a sync effect block, so start the VT directly
-              // This allows the accept loop to continue immediately
-              val socket = clientSocket // Capture for closure
-              Thread.startVirtualThread(() => handleClient(socket).unsafeRunSync())
-
-              // Try to accept next pending connection (returns null if none)
-              clientSocket = serverSocket.accept()
-            }
-          }
+        // Enable TCP_QUICKACK on Linux to avoid delayed ACK (avoid 40ms delay)
+        try {
+          clientSocket.setOption(ExtendedSocketOptions.TCP_QUICKACK, true)
+        } catch {
+          case _: Exception => () // TCP_QUICKACK not available on this platform
         }
-      }
 
-      selector.close()
-    }.mapError(e => HttpError.NetworkError(s"Accept loop error: ${e.getMessage}", Some(e)))
+        // Track active client for graceful shutdown
+        activeClients.put(clientSocket, java.lang.Boolean.TRUE)
+      }.mapError(e => HttpError.NetworkError(s"Socket config error: ${e.getMessage}", Some(e)))
+      // Dispatch to daemon fiber - prevents memory accumulation from fiber tracking
+      _ <- runtime.forkDaemon(handleClient(clientSocket)).map(_ => ())
+    } yield ()
+    Eru.forever(acceptAndHandle)
   }
 
   /** Handle a single client connection.
@@ -204,24 +175,26 @@ private[server] final class NativeHttpServer(
             convertH2RequestToRequest(h2Headers, body).flatMap { request =>
               // Fork the handler - main loop continues reading frames (processes WINDOW_UPDATE)
               val handlerEffect = handler(request).attempt.flatMap { handlerResult =>
-                val response = handlerResult match {
-                  case Result.Success(resp) => resp
+                val responseEffect = handlerResult match {
+                  case Result.Success(resp) => Eru.succeed(resp)
                   case Result.Failure(httpError: HttpError) => errorToResponse(httpError)
                 }
 
-                // Convert response to HTTP/2 and send
-                val statusCode = response.status.value
-                val responseHeaders = response.headers.toList.map { case (name, value) => (name.toLowerCase, value) }
+                responseEffect.flatMap { response =>
+                  // Convert response to HTTP/2 and send
+                  val statusCode = response.status.value
+                  val responseHeaders = response.headers.toList.map { case (name, value) => (name.toLowerCase, value) }
 
-                // Get response body bytes
-                val bodyBytes = response.body match {
-                  case Body.Empty => None
-                  case Body.Text(text, _, charset) => Some(text.getBytes(charset.toJavaCharset))
-                  case Body.Binary(bytes, _) => Some(bytes.toArray)
-                  case Body.Stream(_, _, _) => None // TODO: Support streaming in HTTP/2
+                  // Get response body bytes
+                  val bodyBytes = response.body match {
+                    case Body.Empty => None
+                    case Body.Text(text, _, charset) => Some(text.getBytes(charset.toJavaCharset))
+                    case Body.Binary(bytes, _) => Some(bytes.toArray)
+                    case Body.Stream(_, _, _) => None // TODO: Support streaming in HTTP/2
+                  }
+
+                  h2conn.sendResponse(streamId, statusCode, responseHeaders, bodyBytes).mapError(h2ErrorToHttpError)
                 }
-
-                h2conn.sendResponse(streamId, statusCode, responseHeaders, bodyBytes).mapError(h2ErrorToHttpError)
               }
 
               // Fork and continue - don't wait for response to complete
@@ -359,11 +332,9 @@ private[server] final class NativeHttpServer(
 
         // Convert handler result to response (either success or error response)
         // Add Connection and Content-Length headers
-        response <- Eru.effectTotal {
-          handlerResult match {
-            case Result.Success(resp) => addConnectionHeader(request, resp)
-            case Result.Failure(httpError: HttpError) => addConnectionHeader(request, errorToResponse(httpError))
-          }
+        response <- handlerResult match {
+          case Result.Success(resp) => addConnectionHeader(request, resp)
+          case Result.Failure(httpError: HttpError) => errorToResponse(httpError).flatMap(addConnectionHeader(request, _))
         }
 
         // Check if this is a WebSocket upgrade response
@@ -449,64 +420,58 @@ private[server] final class NativeHttpServer(
     *
     * If the client requests Connection: close, we echo it back in the response.
     */
-  private def addConnectionHeader(request: Request[Body], response: Response[Body]): Response[Body] = {
+  private def addConnectionHeader(request: Request[Body], response: Response[Body]): Eru[Nothing, Response[Body]] = {
     // First, ensure Content-Length or Transfer-Encoding is set
-    val withContentLength =
+    val withContentLength: Eru[Nothing, Response[Body]] =
       if response.headers.contains(HeaderNames.ContentLength) ||
         response.headers.contains(HeaderNames.TransferEncoding)
       then {
-        response
+        Eru.succeed(response)
       } else {
         // Calculate content length based on body type
-        response.body match {
+        val headerEffect = response.body match {
           case Body.Empty =>
-            response.headers.add(HeaderNames.ContentLength, "0").attempt.unsafeRunSync() match {
-              case Result.Success(newHeaders) => response.copy(headers = newHeaders)
-              case Result.Failure(_) => response
-            }
+            response.headers.add(HeaderNames.ContentLength, "0")
 
           case Body.Text(text, _, charset) =>
             val length = text.getBytes(charset.toJavaCharset).length
-            response.headers.add(HeaderNames.ContentLength, length.toString).attempt.unsafeRunSync() match {
-              case Result.Success(newHeaders) => response.copy(headers = newHeaders)
-              case Result.Failure(_) => response
-            }
+            response.headers.add(HeaderNames.ContentLength, length.toString)
 
           case Body.Binary(bytes, _) =>
-            response.headers.add(HeaderNames.ContentLength, bytes.length.toString).attempt.unsafeRunSync() match {
-              case Result.Success(newHeaders) => response.copy(headers = newHeaders)
-              case Result.Failure(_) => response
-            }
+            response.headers.add(HeaderNames.ContentLength, bytes.length.toString)
 
           case Body.Stream(_, contentLength, _) =>
             contentLength match {
               case Some(length) =>
-                // Stream with known length - use Content-Length
-                response.headers.add(HeaderNames.ContentLength, length.toString).attempt.unsafeRunSync() match {
-                  case Result.Success(newHeaders) => response.copy(headers = newHeaders)
-                  case Result.Failure(_) => response
-                }
+                response.headers.add(HeaderNames.ContentLength, length.toString)
               case None =>
-                // Stream with unknown length - use chunked encoding
-                response.headers.add(HeaderNames.TransferEncoding, "chunked").attempt.unsafeRunSync() match {
-                  case Result.Success(newHeaders) => response.copy(headers = newHeaders)
-                  case Result.Failure(_) => response
-                }
+                response.headers.add(HeaderNames.TransferEncoding, "chunked")
             }
         }
+        headerEffect
+          .map(newHeaders => response.copy(headers = newHeaders))
+          .attempt
+          .map {
+            case Result.Success(r) => r
+            case Result.Failure(_) => response
+          }
       }
 
     // Then add Connection header if not present
-    if withContentLength.headers.contains(HeaderNames.Connection) then {
-      withContentLength
-    } else {
-      // Check if client requested Connection: close
-      val requestConnection = request.headers.getFirst(HeaderNames.Connection).map(_.value.toLowerCase)
-      val connectionValue = if requestConnection.contains("close") then "close" else "keep-alive"
+    withContentLength.flatMap { resp =>
+      if resp.headers.contains(HeaderNames.Connection) then {
+        Eru.succeed(resp)
+      } else {
+        val requestConnection = request.headers.getFirst(HeaderNames.Connection).map(_.value.toLowerCase)
+        val connectionValue = if requestConnection.contains("close") then "close" else "keep-alive"
 
-      withContentLength.headers.add(HeaderNames.Connection, connectionValue).attempt.unsafeRunSync() match {
-        case Result.Success(newHeaders) => withContentLength.copy(headers = newHeaders)
-        case Result.Failure(_) => withContentLength
+        resp.headers.add(HeaderNames.Connection, connectionValue)
+          .map(newHeaders => resp.copy(headers = newHeaders))
+          .attempt
+          .map {
+            case Result.Success(r) => r
+            case Result.Failure(_) => resp
+          }
       }
     }
   }
@@ -529,7 +494,7 @@ private[server] final class NativeHttpServer(
 
   /** Convert HTTP error to error response
     */
-  private def errorToResponse(error: HttpError): Response[Body] = {
+  private def errorToResponse(error: HttpError): Eru[Nothing, Response[Body]] = {
     val (status, message) = error match {
       case HttpError.InvalidMethod(_) =>
         (StatusCode.BadRequest, "Bad Request: Invalid HTTP method")
@@ -548,7 +513,7 @@ private[server] final class NativeHttpServer(
     val body = Body.Text(message, None, Charset.UTF8)
     val contentType = "text/plain; charset=utf-8"
 
-    val headers = Headers.empty
+    Headers.empty
       .add(HeaderNames.ContentType, contentType)
       .flatMap(_.add(HeaderNames.ContentLength, message.getBytes.length.toString))
       .attempt
@@ -556,13 +521,7 @@ private[server] final class NativeHttpServer(
         case Result.Success(h) => h
         case Result.Failure(_) => Headers.empty
       }
-      .unsafeRunSync()
-
-    Response(
-      status = status,
-      headers = headers,
-      body = body
-    )
+      .map(headers => Response(status = status, headers = headers, body = body))
   }
 
   def shutdown: Eru[HttpError, Unit] = {
