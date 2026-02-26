@@ -1,6 +1,8 @@
 #!/bin/bash
-# Comprehensive benchmark matrix for eru-http server
-# Tests combinations of GC, connections, heap size, and semaphore limits
+# Benchmark matrix for eru-http server
+# Tests combinations of connections, heap size, and semaphore limits under ZGC generational.
+# IMPORTANT: Only ZGC generational is supported. G1GC/ParallelGC have known SIGSEGV crashes
+# with Virtual Threads under heavy load.
 
 set -euo pipefail
 
@@ -15,6 +17,7 @@ TEST_DURATION=${TEST_DURATION:-120}  # seconds
 TEST_THREADS=${TEST_THREADS:-12}     # wrk threads
 WARMUP_TIME=${WARMUP_TIME:-10}       # seconds
 RESULTS_DIR=${RESULTS_DIR:-/tmp/eru-http-benchmarks}
+JAR_PATH="benchmarks/target/scala-3.8.2/eru-http-benchmark-server.jar"
 
 # Create results directory
 mkdir -p "$RESULTS_DIR"
@@ -22,7 +25,7 @@ mkdir -p "$RESULTS_DIR"
 # Function to kill all benchmark servers
 kill_servers() {
     echo -e "${YELLOW}Killing all benchmark servers...${NC}"
-    pkill -9 -f "net.ghoula.eru.http.server.BenchmarkServer" 2>/dev/null || true
+    pkill -9 -f "eru-http-benchmark-server" 2>/dev/null || true
     sleep 2
 }
 
@@ -46,63 +49,35 @@ wait_for_server() {
     return 0
 }
 
-# Function to check if server is still running
-is_server_running() {
-    jps | grep -q BenchmarkServer
-}
-
 # Function to run a single benchmark test
 run_benchmark() {
-    local gc_type=$1
-    local heap_size=$2
-    local connections=$3
-    local semaphore=$4
-    local test_id="${gc_type}_heap${heap_size}_c${connections}_sem${semaphore}"
+    local heap_size=$1
+    local connections=$2
+    local semaphore=$3
+    local test_id="ZGC-Gen_heap${heap_size}_c${connections}_sem${semaphore}"
 
     echo ""
     echo -e "${GREEN}========================================${NC}"
     echo -e "${GREEN}Test: $test_id${NC}"
-    echo -e "${GREEN}GC: $gc_type, Heap: $heap_size, Connections: $connections, Semaphore: $semaphore${NC}"
+    echo -e "${GREEN}GC: ZGC Generational, Heap: $heap_size, Connections: $connections, Semaphore: $semaphore${NC}"
     echo -e "${GREEN}========================================${NC}"
 
     # Kill any existing servers
     kill_servers
 
-    # Map GC type to environment variable format
-    local gc_env=""
-    case "$gc_type" in
-        "ParallelGC")
-            gc_env="parallel"
-            ;;
-        "G1GC")
-            gc_env="g1"
-            ;;
-        "ZGC-Gen")
-            gc_env="zgc-gen"
-            ;;
-        "ZGC")
-            gc_env="zgc"
-            ;;
-        *)
-            echo -e "${RED}Unknown GC type: $gc_type${NC}"
-            return 1
-            ;;
-    esac
-
-    # Start server with specific configuration via environment variables
+    # Start server from fat JAR (not inside sbt)
     local server_log="$RESULTS_DIR/${test_id}_server.log"
 
-    echo "GC Type: $gc_type ($gc_env)"
     echo "Heap Size: $heap_size"
     echo "Max Connections: $semaphore"
     echo "Server log: $server_log"
 
-    # Set environment variables for build.sbt to pick up
-    GC_TYPE=$gc_env HEAP_SIZE=$heap_size \
-        sbt -J-Xms2g -J-Xmx2g \
-        -Deru.http.maxConnections=$semaphore \
-        "project server" \
-        "Test/runMain net.ghoula.eru.http.server.BenchmarkServer 8080" \
+    java \
+        -XX:+UseZGC -XX:+ZGenerational \
+        -XX:-CreateCoredumpOnCrash \
+        -server "-Xms${heap_size}" "-Xmx${heap_size}" \
+        "-Deru.http.maxConnections=${semaphore}" \
+        -jar "$JAR_PATH" 8080 \
         > "$server_log" 2>&1 &
 
     local server_pid=$!
@@ -118,17 +93,17 @@ run_benchmark() {
 
     # Warmup
     echo -e "${YELLOW}Warming up for ${WARMUP_TIME}s...${NC}"
-    wrk -t4 -c100 -d${WARMUP_TIME}s http://localhost:8080/ >/dev/null 2>&1 || true
+    wrk -t4 -c100 -d${WARMUP_TIME}s http://localhost:8080/plaintext >/dev/null 2>&1 || true
     sleep 2
 
     # Run benchmark
     local wrk_log="$RESULTS_DIR/${test_id}_wrk.txt"
     echo -e "${YELLOW}Running benchmark (${TEST_DURATION}s)...${NC}"
-    wrk -t${TEST_THREADS} -c${connections} -d${TEST_DURATION}s http://localhost:8080/ 2>&1 | tee "$wrk_log"
+    wrk -t${TEST_THREADS} -c${connections} -d${TEST_DURATION}s http://localhost:8080/plaintext 2>&1 | tee "$wrk_log"
 
     # Check if server is still running
     local server_status="RUNNING"
-    if ! is_server_running; then
+    if ! kill -0 $server_pid 2>/dev/null; then
         server_status="CRASHED"
         echo -e "${RED}Server crashed during test!${NC}"
     else
@@ -139,9 +114,9 @@ run_benchmark() {
     if [ "$server_status" = "RUNNING" ]; then
         local stats_log="$RESULTS_DIR/${test_id}_stats.txt"
         echo "=== JVM Stats ===" > "$stats_log"
-        jps | grep BenchmarkServer | awk '{print $1}' | xargs -I {} jcmd {} VM.flags >> "$stats_log" 2>&1 || true
+        jcmd $server_pid VM.flags >> "$stats_log" 2>&1 || true
         echo "" >> "$stats_log"
-        jps | grep BenchmarkServer | awk '{print $1}' | xargs -I {} jcmd {} GC.heap_info >> "$stats_log" 2>&1 || true
+        jcmd $server_pid GC.heap_info >> "$stats_log" 2>&1 || true
     fi
 
     # Extract key metrics
@@ -150,48 +125,47 @@ run_benchmark() {
     local timeouts=$(grep "timeout" "$wrk_log" | awk '{print $8}')
 
     # Append to summary
-    echo "$test_id,$gc_type,$heap_size,$connections,$semaphore,$throughput,$avg_latency,$timeouts,$server_status" >> "$RESULTS_DIR/summary.csv"
+    echo "$test_id,$heap_size,$connections,$semaphore,$throughput,$avg_latency,$timeouts,$server_status" >> "$RESULTS_DIR/summary.csv"
 
     echo -e "${GREEN}Test completed: $throughput req/s, $avg_latency latency, status: $server_status${NC}"
 
     # Kill server
-    kill_servers
+    kill $server_pid 2>/dev/null || true
     sleep 3
 
     return 0
 }
 
-# Initialize summary CSV
-echo "test_id,gc_type,heap_size,connections,semaphore,throughput_rps,avg_latency,timeouts,status" > "$RESULTS_DIR/summary.csv"
+# Check that fat JAR exists
+if [ ! -f "$JAR_PATH" ]; then
+    echo -e "${RED}Fat JAR not found at $JAR_PATH${NC}"
+    echo "Build it first: sbt benchmarks/assembly"
+    exit 1
+fi
 
-echo -e "${GREEN}Starting Benchmark Matrix${NC}"
+# Initialize summary CSV
+echo "test_id,heap_size,connections,semaphore,throughput_rps,avg_latency,timeouts,status" > "$RESULTS_DIR/summary.csv"
+
+echo -e "${GREEN}Starting Benchmark Matrix (ZGC Generational only)${NC}"
 echo -e "${GREEN}Results will be saved to: $RESULTS_DIR${NC}"
 echo ""
 
-# Phase 1: GC Comparison at Current Settings (8GB, 400 connections)
-echo -e "${YELLOW}=== PHASE 1: GC Comparison (8GB, 400 connections) ===${NC}"
-run_benchmark "ParallelGC" "8g" 400 1024
-run_benchmark "G1GC" "8g" 400 1024
-run_benchmark "ZGC-Gen" "8g" 400 1024
+# Phase 1: Connection Scaling
+echo -e "${YELLOW}=== PHASE 1: Connection Scaling (8GB heap) ===${NC}"
+run_benchmark "8g" 100 1024
+run_benchmark "8g" 400 1024
+run_benchmark "8g" 1024 8192
+run_benchmark "8g" 4096 8192
 
-# Phase 2: Connection Scaling with ParallelGC
-echo -e "${YELLOW}=== PHASE 2: Connection Scaling with ParallelGC ===${NC}"
-run_benchmark "ParallelGC" "8g" 256 1024
-run_benchmark "ParallelGC" "8g" 1024 8192
-run_benchmark "ParallelGC" "8g" 4096 8192
-run_benchmark "ParallelGC" "8g" 16384 32768
+# Phase 2: Memory Efficiency (1024 connections)
+echo -e "${YELLOW}=== PHASE 2: Memory Efficiency (1024 connections) ===${NC}"
+run_benchmark "2g" 1024 8192
+run_benchmark "4g" 1024 8192
+run_benchmark "8g" 1024 8192
 
-# Phase 3: Memory Efficiency Study (1024 connections)
-echo -e "${YELLOW}=== PHASE 3: Memory Efficiency (ParallelGC, 1024 connections) ===${NC}"
-run_benchmark "ParallelGC" "2g" 1024 8192
-run_benchmark "ParallelGC" "4g" 1024 8192
-run_benchmark "ParallelGC" "8g" 1024 8192
-
-# Phase 4: GC Comparison at High Concurrency (16384 connections)
-echo -e "${YELLOW}=== PHASE 4: GC Comparison at High Concurrency (16384 connections) ===${NC}"
-run_benchmark "ParallelGC" "8g" 16384 32768
-run_benchmark "G1GC" "8g" 16384 32768
-run_benchmark "ZGC-Gen" "8g" 16384 32768
+# Phase 3: High Concurrency
+echo -e "${YELLOW}=== PHASE 3: High Concurrency (8GB heap) ===${NC}"
+run_benchmark "8g" 16384 32768
 
 # Final cleanup
 kill_servers

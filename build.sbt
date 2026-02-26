@@ -56,22 +56,12 @@ ThisBuild / Test / fork := true // Enable fork to use javaOptions
 // IMPORTANT: This project requires ZGC (default). G1GC has known SIGSEGV crashes with
 // JDK 25 + Virtual Threads + heavy class loading. See .sbtopts for sbt's own JVM config.
 val jvmRunOptions = {
-  // Read GC type from environment or system property (default: ZGC generational, default in JDK 23+, explicit for JDK 21)
-  val gcType = sys.env.getOrElse("GC_TYPE", sys.props.getOrElse("gc.type", "zgc"))
   val heapSize = sys.env.getOrElse("HEAP_SIZE", sys.props.getOrElse("heap.size", "2g"))
 
-  val gcOptions = gcType.toLowerCase match {
-    case "parallel" | "parallelgc" =>
-      Seq("-XX:+UseParallelGC", "-XX:+UseNUMA", "-server")
-    case "g1" | "g1gc" =>
-      Seq("-XX:+UseG1GC", "-server")
-    case "zgc" | "zgc-gen" | "zgcgen" =>
-      // ZGC generational is default in JDK 23+, explicit for JDK 21
-      Seq("-XX:+UseZGC", "-XX:+ZGenerational", "-server")
-    case _ =>
-      // Default to ZGC generational (default in JDK 23+, explicit for JDK 21)
-      Seq("-XX:+UseZGC", "-XX:+ZGenerational", "-server")
-  }
+  // ZGC generational is the only supported GC. G1GC/ParallelGC have known SIGSEGV
+  // crashes with Virtual Threads under heavy load. ZGenerational is default in JDK 23+,
+  // explicit for JDK 21.
+  val gcOptions = Seq("-XX:+UseZGC", "-XX:+ZGenerational", "-server")
 
   gcOptions ++ Seq(
     s"-Xms$heapSize", // Initial heap size

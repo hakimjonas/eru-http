@@ -254,12 +254,12 @@ val app = handler.flatMap { resp =>
 ### JVM Tuning
 
 ```bash
-# Recommended JVM flags for benchmarking
+# Recommended JVM flags for benchmarking (ZGC generational only)
 java \
-  -Xms512m -Xmx2g \
-  -XX:+UseG1GC \
-  -XX:MaxGCPauseMillis=20 \
-  -XX:+UseStringDeduplication \
+  -Xms2g -Xmx2g \
+  -XX:+UseZGC -XX:+ZGenerational \
+  -XX:-CreateCoredumpOnCrash \
+  -server \
   -jar benchmark-server.jar
 ```
 
@@ -324,7 +324,7 @@ To contribute benchmark results:
 Example:
 ```
 Hardware: AMD Ryzen 9 5950X (16 cores), 32GB RAM, Ubuntu 22.04
-JVM: OpenJDK 21.0.1, -Xmx2g -XX:+UseG1GC
+JVM: OpenJDK 21.0.10, -Xms2g -Xmx2g -XX:+UseZGC -XX:+ZGenerational
 wrk: -t16 -c1000 -d60s
 Results: 87,543 req/s, P99 latency 18ms
 ```
