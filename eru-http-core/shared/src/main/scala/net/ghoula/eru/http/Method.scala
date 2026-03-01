@@ -157,5 +157,7 @@ object Method {
     value: String,
     reason: String,
     rfc: String = "RFC 9110 Section 9"
-  ) extends Exception(s"Invalid HTTP method '$value': $reason ($rfc)")
+  ) {
+    def message: String = s"Invalid HTTP method '$value': $reason ($rfc)"
+  }
 }

@@ -16,8 +16,6 @@ import net.ghoula.eru.prelude.*
   *   - Blocking I/O is efficient (~10KB per thread vs ~2MB for OS threads)
   *   - Connection pooling with Eru Ref for structured concurrency
   *   - Simple, readable code with no event loops or callbacks
-  *
-  * Compare to NettyHttpClient: ~200 lines vs 402 lines (50% reduction)
   */
 private[client] final class NativeHttpClient(
   config: HttpClientConfig,
@@ -766,14 +764,7 @@ private[client] final class NativeHttpClient(
 
 private[client] object NativeHttpClient {
 
-  /** Create a native HTTP client.
-    *
-    * This is dramatically simpler than NettyHttpClient.create:
-    *   - No EventLoopGroup to manage
-    *   - No Bootstrap configuration
-    *   - No ChannelInitializer setup
-    *   - Just pure Eru effects + blocking NIO + connection pooling
-    */
+  /** Create a native HTTP client. */
   def create(config: HttpClientConfig)(using runtime: EruRuntime): Eru[HttpError, NativeHttpClient] =
     for {
       sslContext <-

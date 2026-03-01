@@ -543,4 +543,6 @@ object Response {
 final case class InvalidResponse(
   reason: String,
   rfc: String
-) extends Exception(s"Invalid response: $reason ($rfc)")
+) {
+  def message: String = s"Invalid response: $reason ($rfc)"
+}

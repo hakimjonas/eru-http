@@ -35,14 +35,14 @@ ThisBuild / scalacOptions ++= Seq(
   "-new-syntax",
   "-no-indent",
   "-source:future",
-  "-release:21", // Target Java 21+ for Virtual Threads support
+  "-release:25", // Target Java 25+ for Virtual Threads support
   "-Yexplicit-nulls"
 )
 
-// Java options - target Java 21 for Virtual Threads support
+// Java options - target Java 25 for Virtual Threads support
 ThisBuild / javacOptions ++= Seq(
   "--release",
-  "21"
+  "25"
 )
 
 // Test settings
@@ -59,9 +59,9 @@ val jvmRunOptions = {
   val heapSize = sys.env.getOrElse("HEAP_SIZE", sys.props.getOrElse("heap.size", "2g"))
 
   // ZGC generational is the only supported GC. G1GC/ParallelGC have known SIGSEGV
-  // crashes with Virtual Threads under heavy load. ZGenerational is default in JDK 23+,
-  // explicit for JDK 21.
-  val gcOptions = Seq("-XX:+UseZGC", "-XX:+ZGenerational", "-server")
+  // crashes with Virtual Threads under heavy load. ZGC is generational by default
+  // since JDK 23.
+  val gcOptions = Seq("-XX:+UseZGC", "-server")
 
   gcOptions ++ Seq(
     s"-Xms$heapSize", // Initial heap size
@@ -111,9 +111,9 @@ ThisBuild / credentials ++= {
 // Assembly merge strategy (applied to all subprojects)
 ThisBuild / assembly / assemblyMergeStrategy := {
   case PathList("META-INF", "services", _*) => MergeStrategy.concat
-  case PathList("META-INF", _*)             => MergeStrategy.discard
+  case PathList("META-INF", _*) => MergeStrategy.discard
   case "scala-collection-compat.properties" => MergeStrategy.first
-  case _                                    => MergeStrategy.first
+  case _ => MergeStrategy.first
 }
 
 // Shared settings

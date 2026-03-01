@@ -231,5 +231,7 @@ object ContentEncoding {
     value: String,
     reason: String,
     rfc: String = "RFC 9110 Section 8.4"
-  ) extends Exception(s"Invalid content encoding '$value': $reason ($rfc)")
+  ) {
+    def message: String = s"Invalid content encoding '$value': $reason ($rfc)"
+  }
 }

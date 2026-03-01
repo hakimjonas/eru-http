@@ -299,4 +299,6 @@ enum HttpVersion(val major: Int, val minor: Int) {
 final case class InvalidRequest(
   reason: String,
   rfc: String
-) extends Exception(s"Invalid request: $reason ($rfc)")
+) {
+  def message: String = s"Invalid request: $reason ($rfc)"
+}

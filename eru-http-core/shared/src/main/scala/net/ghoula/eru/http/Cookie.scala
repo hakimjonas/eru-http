@@ -261,30 +261,27 @@ object Cookie {
     *   A list of parsed Cookies or an InvalidCookie error
     */
   def parseCookie(cookieHeader: String): Eru[InvalidCookie, List[Cookie]] = {
-    Eru.effect {
-      val trimmed = cookieHeader.trim
-      if trimmed.isEmpty then {
-        List.empty[Cookie]
-      } else {
-        // Split by semicolon
-        val parts = trimmed.split(';').map(_.trim)
-        parts.toList.map { part =>
-          val eqIdx = part.indexOf('=')
-          if eqIdx < 0 then throw InvalidCookie(part, "Cookie must have name=value format")
-
+    val trimmed = cookieHeader.trim
+    if trimmed.isEmpty then {
+      Eru.succeed(List.empty[Cookie])
+    } else {
+      val parts = trimmed.split(';').map(_.trim).toList
+      Eru.foreach(parts) { part =>
+        val eqIdx = part.indexOf('=')
+        if eqIdx < 0 then {
+          Eru.fail(InvalidCookie(part, "Cookie must have name=value format"))
+        } else {
           val name = part.substring(0, eqIdx).trim
           val value = part.substring(eqIdx + 1).trim
-
-          // Validate name and value
-          if !isValidCookieName(name) then throw InvalidCookie(name, "Invalid cookie name")
-          if !isValidCookieValue(value) then throw InvalidCookie(value, "Invalid cookie value")
-
-          Cookie(name, value)
+          if !isValidCookieName(name) then {
+            Eru.fail(InvalidCookie(name, "Invalid cookie name"))
+          } else if !isValidCookieValue(value) then {
+            Eru.fail(InvalidCookie(value, "Invalid cookie value"))
+          } else {
+            Eru.succeed(Cookie(name, value))
+          }
         }
       }
-    }.mapError {
-      case e: InvalidCookie => e
-      case e: Throwable => InvalidCookie(cookieHeader, s"Failed to parse Cookie: ${e.getMessage}")
     }
   }
 
@@ -349,7 +346,9 @@ object Cookie {
     value: String,
     reason: String,
     rfc: String = "RFC 6265"
-  ) extends Exception(s"Invalid cookie '$value': $reason ($rfc)")
+  ) {
+    def message: String = s"Invalid cookie '$value': $reason ($rfc)"
+  }
 }
 
 /** SameSite attribute for cookies as defined in RFC 6265bis.

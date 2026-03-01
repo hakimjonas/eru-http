@@ -248,11 +248,9 @@ class WebSocketTypesSpec extends FunSuite {
     assertEquals(WebSocketError.HandshakeFailed("test", "RFC").suggestedCloseCode, None)
   }
 
-  test("WebSocketError.toException creates WebSocketException") {
+  test("WebSocketError.toException creates Exception") {
     val error = WebSocketError.NetworkError("connection lost", None)
-    error.toException match {
-      case WebSocketException(msg, _) =>
-        assert(msg.contains("connection lost"))
-    }
+    val ex = error.toException
+    assert(ex.getMessage.contains("connection lost"))
   }
 }

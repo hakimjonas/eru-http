@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes how to benchmark eru-http's performance and provides baseline metrics. eru-http is built on Netty with Eru effects, leveraging zero-cost abstractions via Scala 3 inline methods and extension methods.
+This document describes how to benchmark eru-http's performance and provides baseline metrics. eru-http uses blocking NIO with Virtual Threads and Eru effects, leveraging zero-cost abstractions via Scala 3 inline methods and extension methods.
 
 ## Benchmark Tools
 
@@ -149,13 +149,13 @@ Generates HTML reports in `target/gatling/`.
 ### Architecture
 
 eru-http uses:
-- **Netty**: Industry-standard async I/O framework (used by Play, Akka HTTP, http4s)
+- **Blocking NIO + Virtual Threads**: Each connection on its own lightweight thread (~10KB stack)
 - **Eru effects**: Zero-cost effect system with inline transformations
 - **Scala 3**: Modern compiler with inline methods, extension methods, opaque types
 
 ### Expected Performance Characteristics
 
-Based on Netty's capabilities and Eru's zero-cost abstractions:
+Based on NIO + Virtual Threads and Eru's zero-cost abstractions:
 
 #### Throughput
 - **Simple responses** (plaintext): 50k-150k req/s (single machine, 12 cores)
@@ -170,12 +170,11 @@ Based on Netty's capabilities and Eru's zero-cost abstractions:
 #### Resource Usage
 - **Memory**: ~50-200MB heap for typical workloads
 - **CPU**: Scales linearly with load up to hardware limits
-- **Connections**: Netty's connection pooling handles 10k+ concurrent connections
+- **Connections**: Virtual Thread-backed connection pooling handles 10k+ concurrent connections
 
 ### Comparison with Other Libraries
 
 #### vs. http4s (Cats Effect)
-- **Similar throughput**: Both use Netty backend
 - **eru-http advantage**: Simpler effect model, faster compile times
 - **http4s advantage**: Mature ecosystem, streaming
 
@@ -257,22 +256,24 @@ val app = handler.flatMap { resp =>
 # Recommended JVM flags for benchmarking (ZGC generational only)
 java \
   -Xms2g -Xmx2g \
-  -XX:+UseZGC -XX:+ZGenerational \
+  -XX:+UseZGC \
   -XX:-CreateCoredumpOnCrash \
   -server \
   -jar benchmark-server.jar
 ```
 
-### Netty Tuning
+### OS Tuning
 
-eru-http uses sensible Netty defaults, but for extreme performance:
+For extreme performance, tune OS-level socket options:
 
-```scala
-// In NettyHttpServer configuration (internal)
-bootstrap.option(ChannelOption.SO_BACKLOG, 1024)
-bootstrap.option(ChannelOption.SO_REUSEADDR, true)
-bootstrap.childOption(ChannelOption.SO_KEEPALIVE, true)
-bootstrap.childOption(ChannelOption.TCP_NODELAY, true)
+```bash
+# Increase file descriptor limits
+ulimit -n 65536
+
+# Tune TCP settings (Linux)
+sysctl -w net.core.somaxconn=65535
+sysctl -w net.ipv4.tcp_max_syn_backlog=65535
+sysctl -w net.ipv4.tcp_tw_reuse=1
 ```
 
 ## TechEmpower Benchmarks
@@ -308,8 +309,7 @@ After deployment:
 - wrk: https://github.com/wg/wrk
 - Gatling: https://gatling.io/
 - TechEmpower: https://www.techempower.com/benchmarks/
-- Netty Performance: https://netty.io/wiki/
-- Eru Documentation: (link to Eru docs)
+- Eru Documentation: https://github.com/ghoula/eru
 
 ## Contributing Benchmarks
 
@@ -323,8 +323,8 @@ To contribute benchmark results:
 
 Example:
 ```
-Hardware: AMD Ryzen 9 5950X (16 cores), 32GB RAM, Ubuntu 22.04
-JVM: OpenJDK 21.0.10, -Xms2g -Xmx2g -XX:+UseZGC -XX:+ZGenerational
+Hardware: AMD Ryzen 9 5950X (16 cores), 32GB RAM
+JVM: OpenJDK 25, -Xms2g -Xmx2g -XX:+UseZGC
 wrk: -t16 -c1000 -d60s
 Results: 87,543 req/s, P99 latency 18ms
 ```

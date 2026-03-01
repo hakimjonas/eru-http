@@ -183,6 +183,30 @@ class H2ConnectionSpec extends FunSuite {
     assert(result.isFailure)
   }
 
+  test("registerPeerStream refuses when maxConcurrentStreams exceeded (RFC 9113 Section 5.1.2)") {
+    val settings = H2Settings.create(maxConcurrentStreams = 2).assertSuccess
+    val conn = H2Connection.server(settings).assertSuccess
+
+    // Register 2 peer streams and transition to Open (client sends odd stream IDs)
+    val s1 = conn.registerPeerStream(1).assertSuccess
+    s1.receiveHeaders(endStream = false).assertSuccess
+    val s2 = conn.registerPeerStream(3).assertSuccess
+    s2.receiveHeaders(endStream = false).assertSuccess
+
+    assertEquals(conn.activeStreamCount.assertSuccess, 2)
+
+    // Third should fail with REFUSED_STREAM
+    val result = conn.registerPeerStream(5)
+    assert(result.isFailure)
+    result.assertFailure match {
+      case H2Error.StreamError(streamId, errorCode, _) =>
+        assertEquals(streamId, 5)
+        assertEquals(errorCode, H2ErrorCode.RefusedStream)
+      case other =>
+        fail(s"Expected StreamError with RefusedStream, got: $other")
+    }
+  }
+
   // ============================================================================
   // Connection Flow Control
   // ============================================================================

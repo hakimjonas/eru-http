@@ -219,5 +219,7 @@ object WebSocketCloseCode {
     code: Int,
     reason: String,
     rfc: String = "RFC 6455 Section 7.4"
-  ) extends Exception(s"Invalid WebSocket close code $code: $reason ($rfc)")
+  ) {
+    def message: String = s"Invalid WebSocket close code $code: $reason ($rfc)"
+  }
 }

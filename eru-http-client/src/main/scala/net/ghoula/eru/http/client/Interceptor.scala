@@ -67,9 +67,9 @@ object Interceptor {
   inline def addHeader(name: String, value: String): RequestInterceptor = req =>
     req.setHeader(name, value).mapError {
       case e: HeaderName.InvalidHeaderName =>
-        HttpError.InvalidRequest(InvalidRequest(s"Invalid header name: ${e.getMessage}", "RFC 9110"))
+        HttpError.InvalidRequest(InvalidRequest(s"Invalid header name: ${e.message}", "RFC 9110"))
       case e: HeaderValue.InvalidHeaderValue =>
-        HttpError.InvalidRequest(InvalidRequest(s"Invalid header value: ${e.getMessage}", "RFC 9110"))
+        HttpError.InvalidRequest(InvalidRequest(s"Invalid header value: ${e.message}", "RFC 9110"))
     }
 
   /** Add multiple headers to all requests. */

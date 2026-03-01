@@ -116,4 +116,6 @@ object Bytes {
 final case class InvalidCharset(
   name: String,
   reason: String
-) extends Exception(s"Invalid charset: $name ($reason)")
+) {
+  def message: String = s"Invalid charset: $name ($reason)"
+}

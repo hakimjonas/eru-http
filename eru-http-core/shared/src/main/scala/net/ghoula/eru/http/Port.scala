@@ -233,5 +233,7 @@ object Port {
   final case class InvalidPort(
     attempted: Int,
     reason: String
-  ) extends Exception(s"Invalid port $attempted: $reason")
+  ) {
+    def message: String = s"Invalid port $attempted: $reason"
+  }
 }

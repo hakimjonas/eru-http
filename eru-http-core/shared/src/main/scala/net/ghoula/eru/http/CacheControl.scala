@@ -509,4 +509,6 @@ final case class ParseError(
   value: String,
   reason: String,
   rfc: String = "RFC 9111"
-) extends Exception(s"Failed to parse '$value': $reason ($rfc)")
+) {
+  def message: String = s"Failed to parse '$value': $reason ($rfc)"
+}

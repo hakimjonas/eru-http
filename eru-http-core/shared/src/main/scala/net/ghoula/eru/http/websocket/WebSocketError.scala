@@ -105,9 +105,9 @@ enum WebSocketError {
 
   /** Convert this error to an exception.
     */
-  def toException: WebSocketException = this match {
-    case NetworkError(_, cause) => WebSocketException(errorMessage, cause)
-    case _ => WebSocketException(errorMessage, None)
+  def toException: Exception = this match {
+    case NetworkError(_, cause) => cause.fold(new Exception(errorMessage))(c => new Exception(errorMessage, c))
+    case _ => new Exception(errorMessage)
   }
 
   /** Get the appropriate close code for this error, if applicable.
@@ -127,4 +127,3 @@ enum WebSocketError {
 /** Exception wrapper for WebSocket errors.
   */
 final case class WebSocketException(message: String, cause: Option[Throwable] = None)
-    extends Exception(message, cause.getOrElse(null))

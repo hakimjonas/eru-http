@@ -1,7 +1,6 @@
 # SBT JVM options for eru-http
 # Use ZGC to avoid G1GC SIGSEGV crashes on JDK 25 with Virtual Threads
 -J-XX:+UseZGC
--J-XX:+ZGenerational
 -J-server
 -J-Xms1g
 -J-Xmx4g

@@ -2,19 +2,19 @@
 
 [![CI](https://github.com/hakimjonas/eru-http/workflows/CI/badge.svg)](https://github.com/hakimjonas/eru-http/actions/workflows/ci.yml)
 [![Scala 3.8.2](https://img.shields.io/badge/scala-3.8.2-red.svg)](https://www.scala-lang.org/)
-[![Java 21](https://img.shields.io/badge/java-21-blue.svg)](https://openjdk.org/projects/jdk/21/)
+[![Java 25](https://img.shields.io/badge/java-25-blue.svg)](https://openjdk.org/projects/jdk/25/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **Standards-compliant HTTP client and server built on Eru with Virtual Threads**
 
 eru-http is a modern, type-safe HTTP library for Scala 3 that leverages the [Eru effect system](https://github.com/ghoula/eru) for elegant, composable HTTP programming. Built on **native blocking NIO + Virtual Threads** for simplicity and performance, eru-http provides zero-cost abstractions through Scala 3's inline methods and opaque types.
 
-> **Architecture Note**: eru-http uses blocking NIO with Eru's Virtual Thread backend, eliminating the complexity of event loops and callbacks while maintaining excellent performance. See [ARCHITECTURE-FIX.md](ARCHITECTURE-FIX.md) for details.
+> **Architecture Note**: eru-http uses blocking NIO with Eru's Virtual Thread backend, eliminating the complexity of event loops and callbacks while maintaining excellent performance.
 
 ## Features
 
 ### 🚀 **HTTP Client**
-- Standards-compliant HTTP/1.1 client (HTTP/2 support planned)
+- Standards-compliant HTTP/1.1 and HTTP/2 client
 - Composable request/response interceptors
 - Automatic redirect handling
 - Cookie jar with domain/path matching (RFC 6265)
@@ -29,7 +29,8 @@ eru-http is a modern, type-safe HTTP library for Scala 3 that leverages the [Eru
 - Composable middleware with zero-cost abstractions
 - Built-in middleware: CORS, auth, logging, error handling
 - Request routing with pattern matching
-- Server-Sent Events (SSE) support (planned)
+- WebSocket support (RFC 6455, ws:// and wss://)
+- Server-Sent Events (SSE) support
 - Multipart form data handling (RFC 7578)
 - Structured concurrency for automatic cleanup
 
@@ -391,18 +392,7 @@ HttpClientConfig.default.withTls(
 
 ## Examples
 
-The `examples/` directory contains comprehensive, copy-paste ready examples:
-
-1. **[01_SimpleClient.scala](examples/src/main/scala/examples/01_SimpleClient.scala)** - Basic HTTP client usage
-2. **[02_ClientWithAuth.scala](examples/src/main/scala/examples/02_ClientWithAuth.scala)** - Interceptors and authentication
-3. **[03_FileUpload.scala](examples/src/main/scala/examples/03_FileUpload.scala)** - Multipart form data
-4. **[04_SimpleServer.scala](examples/src/main/scala/examples/04_SimpleServer.scala)** - Basic HTTP server
-5. **[05_ServerWithMiddleware.scala](examples/src/main/scala/examples/05_ServerWithMiddleware.scala)** - Middleware composition
-6. **[06_RestApi.scala](examples/src/main/scala/examples/06_RestApi.scala)** - Complete REST API with CRUD
-7. **[07_ServerSentEvents.scala](examples/src/main/scala/examples/07_ServerSentEvents.scala)** - SSE event streams
-8. **[08_CompleteApp.scala](examples/src/main/scala/examples/08_CompleteApp.scala)** - Production-ready application
-
-See [examples/README.md](examples/README.md) for detailed explanations.
+See [examples/README.md](examples/README.md) for compliance test servers and usage examples.
 
 ## Architecture
 
@@ -416,13 +406,13 @@ eru-http
 │   └── Compression, ContentEncoding
 │
 ├── eru-http-client    # HTTP client implementation
-│   ├── HttpClient (Netty-based)
+│   ├── HttpClient (NIO + Virtual Threads)
 │   ├── Interceptors
 │   ├── CookieJar
 │   └── HttpClientConfig
 │
 └── eru-http-server    # HTTP server implementation
-    ├── HttpServer (Netty-based)
+    ├── HttpServer (NIO + Virtual Threads)
     ├── Middleware
     ├── RequestHandler
     └── HttpServerConfig
@@ -438,7 +428,7 @@ eru-http
 
 ## Performance
 
-eru-http is built on Netty, the same high-performance I/O framework used by Play Framework, Akka HTTP, and http4s. Combined with Eru's zero-cost effect transformations, eru-http delivers excellent performance.
+eru-http uses blocking NIO with Virtual Threads — each connection runs on its own lightweight thread (~10KB stack), eliminating event-loop complexity while scaling to 100K+ concurrent connections. Combined with Eru's zero-cost effect transformations, eru-http delivers excellent performance.
 
 ### Benchmark Results (Actual)
 
@@ -455,67 +445,14 @@ eru-http is built on Netty, the same high-performance I/O framework used by Play
 
 **Configuration:** Default settings, no JVM tuning, no middleware applied
 
-See [BENCHMARKING.md](BENCHMARKING.md) for testing guide and [BENCHMARK_RESULTS.md](BENCHMARK_RESULTS.md) for detailed results.
-
-## Comparison with Other Libraries
-
-### vs. http4s
-- **Similarities**: Both use Netty backend, functional approach
-- **eru-http advantages**:
-  - Simpler effect model (Eru vs Cats Effect)
-  - Faster compile times
-  - Zero-cost interceptors/middleware via `inline`
-  - More intuitive API for newcomers
-- **http4s advantages**:
-  - Mature ecosystem
-  - FS2 streaming integration
-  - Larger community
-
-### vs. sttp
-- **Similarities**: Both focus on client-side HTTP
-- **eru-http advantages**:
-  - Native server support
-  - Effect-first design
-  - Unified client/server types
-- **sttp advantages**:
-  - Multiple backend support (sync, async, streaming)
-  - Comprehensive client features
-  - More flexible effect integration
-
-### vs. ZIO HTTP
-- **Similarities**: Both leverage Scala 3, functional effects
-- **eru-http advantages**:
-  - Simpler, less opinionated
-  - Lower framework overhead
-  - Easier learning curve
-- **ZIO HTTP advantages**:
-  - Full ZIO ecosystem integration
-  - WebSocket support (eru-http: planned)
-  - More built-in features
-
-### vs. Akka HTTP
-- **eru-http advantages**:
-  - Scala 3 native
-  - Simpler API
-  - No actor system required
-  - Better type inference
-- **Akka HTTP advantages**:
-  - Battle-tested in production
-  - WebSocket support
-  - Larger ecosystem
-
-**When to choose eru-http:**
-- You want a modern, Scala 3-first HTTP library
-- You prefer simple, composable effects over complex effect systems
-- You value compile-time performance and zero-cost abstractions
-- You're building Eru-based applications
+See [BENCHMARKING.md](BENCHMARKING.md) for testing guide.
 
 ## Project Status
 
 **Current Version:** 1.0.0
 
 **Maturity:** Production Ready
-- ✅ 610 tests passing
+- ✅ ~990 tests passing
 - ✅ Zero scalafix violations
 - ✅ Zero compiler warnings
 - ✅ Complete RFC compliance
@@ -527,33 +464,33 @@ See [BENCHMARKING.md](BENCHMARKING.md) for testing guide and [BENCHMARK_RESULTS.
 - ⏳ Scala.js (pending Eru JS support)
 - ⏳ Scala Native (pending Eru Native support)
 
-**Planned Features (1.x):**
-- WebSocket support (eru-websocket package)
-- HTTP/2 support
+**Shipped in 1.0:**
+- ✅ WebSocket support (RFC 6455, ws:// and wss://)
+- ✅ HTTP/2 support (RFC 9113, HPACK, stream multiplexing)
+
+**Planned (1.x):**
 - Resilience patterns (eru-http-resilience)
 - Metrics and monitoring (eru-http-metrics)
 
 ## Documentation
 
-- **[Examples README](examples/README.md)** - Detailed usage examples
+- **[Examples README](examples/README.md)** - Usage examples
 - **[Benchmarking Guide](BENCHMARKING.md)** - Performance testing
-- **[Contributing](CONTRIBUTING.md)** - How to contribute *(TODO)*
-- **[Changelog](CHANGELOG.md)** - Version history *(TODO)*
+- **[Roadmap](ROADMAP.md)** - Project roadmap
 
 ## Requirements
 
-- **Scala:** 3.7.3 or higher
-- **JVM:** Java 21 or higher
+- **Scala:** 3.8.2 or higher
+- **JVM:** Java 25 or higher (ZGC recommended)
 - **Dependencies:**
   - Eru (effect system)
   - Valar (validation)
-  - Netty (I/O framework)
   - Brotli4j (compression)
 
 ## Building from Source
 
 ```bash
-git clone https://github.com/ghoula/eru-http.git
+git clone https://github.com/hakimjonas/eru-http.git
 cd eru-http
 sbt test
 ```
@@ -570,7 +507,7 @@ Contributions are welcome! Please:
 6. Run scalafix: `sbt fix`
 7. Submit a pull request
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+See the contributing section above for guidelines.
 
 ## License
 
@@ -579,7 +516,6 @@ eru-http is licensed under the [MIT License](LICENSE).
 ## Acknowledgments
 
 - **[Eru](https://github.com/ghoula/eru)** - The effect system powering eru-http
-- **[Netty](https://netty.io/)** - High-performance async I/O framework
 - **[http4s](https://http4s.org/)** - Inspiration for functional HTTP
 - **[sttp](https://sttp.softwaremill.com/)** - Inspiration for client API design
 

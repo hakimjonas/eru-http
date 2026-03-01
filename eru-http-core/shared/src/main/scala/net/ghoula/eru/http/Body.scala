@@ -465,7 +465,7 @@ object ChunkStream {
 final case class EncodeError(
   message: String,
   cause: Option[Throwable] = None
-) extends Exception(message, cause.getOrElse(null))
+)
 
 /** Error that can occur during body decoding.
   */
@@ -474,7 +474,7 @@ final case class DecodeError(
   cause: Option[Throwable] = None,
   expected: Option[MediaType] = None,
   actual: Option[MediaType] = None
-) extends Exception(message, cause.getOrElse(null))
+)
 
 /** Type class for encoding values to HTTP bodies.
   *

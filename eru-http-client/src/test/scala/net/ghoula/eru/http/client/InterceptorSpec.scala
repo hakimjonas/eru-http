@@ -507,7 +507,7 @@ class InterceptorSpec extends FunSuite {
       val error = result.assertFailure
       error match {
         case HttpError.InvalidRequest(e) =>
-          assert(e.getMessage.contains("Invalid header name"))
+          assert(e.message.contains("Invalid header name"))
         case other =>
           fail(s"Expected InvalidRequest but got: $other")
       }

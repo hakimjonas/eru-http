@@ -342,7 +342,9 @@ object HeaderValue {
     value: String,
     reason: String,
     rfc: String = "RFC 9110 Section 5.5"
-  ) extends Exception(s"Invalid header value '$value': $reason ($rfc)")
+  ) {
+    def message: String = s"Invalid header value '$value': $reason ($rfc)"
+  }
 }
 
 /** HTTP header name validated per RFC 9110 Section 5.1.
@@ -389,7 +391,9 @@ object HeaderName {
     value: String,
     reason: String,
     rfc: String = "RFC 9110 Section 5.1"
-  ) extends Exception(s"Invalid header name '$value': $reason ($rfc)")
+  ) {
+    def message: String = s"Invalid header name '$value': $reason ($rfc)"
+  }
 }
 
 /** Common header names as string constants. These are not validated HeaderName types, just

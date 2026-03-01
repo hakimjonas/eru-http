@@ -509,7 +509,7 @@ Response.internalServerError(body)
 
 ### Prerequisites
 
-- Scala 3.7.3+
+- Scala 3.8.2+
 - sbt 1.x
 - Eru runtime
 

@@ -384,5 +384,7 @@ object StatusCode {
     code: Int,
     reason: String,
     rfc: String = "RFC 9110 Section 15"
-  ) extends Exception(s"Invalid status code $code: $reason ($rfc)")
+  ) {
+    def message: String = s"Invalid status code $code: $reason ($rfc)"
+  }
 }

@@ -27,15 +27,15 @@ package object http {
     case ProtocolError(msg: String, rfc: String)
 
     def message: String = this match {
-      case InvalidMethod(e) => e.getMessage
-      case InvalidStatusCode(e) => e.getMessage
-      case InvalidUri(e) => e.getMessage
-      case InvalidMediaType(e) => e.getMessage
-      case InvalidRequest(e) => e.getMessage
-      case InvalidResponse(e) => e.getMessage
-      case BodyEncodeError(e) => e.getMessage
-      case BodyDecodeError(e) => e.getMessage
-      case InvalidCookie(e) => e.getMessage
+      case InvalidMethod(e) => e.message
+      case InvalidStatusCode(e) => e.message
+      case InvalidUri(e) => e.message
+      case InvalidMediaType(e) => e.message
+      case InvalidRequest(e) => e.message
+      case InvalidResponse(e) => e.message
+      case BodyEncodeError(e) => e.message
+      case BodyDecodeError(e) => e.message
+      case InvalidCookie(e) => e.message
       case NetworkError(m, _) => m
       case TimeoutError(m) => m
       case ConnectionError(m, _) => m
@@ -43,15 +43,15 @@ package object http {
     }
 
     def toException: Exception = this match {
-      case InvalidMethod(e) => e
-      case InvalidStatusCode(e) => e
-      case InvalidUri(e) => e
-      case InvalidMediaType(e) => e
-      case InvalidRequest(e) => e
-      case InvalidResponse(e) => e
-      case BodyEncodeError(e) => e
-      case BodyDecodeError(e) => e
-      case InvalidCookie(e) => e
+      case InvalidMethod(e) => new Exception(e.message)
+      case InvalidStatusCode(e) => new Exception(e.message)
+      case InvalidUri(e) => new Exception(e.message)
+      case InvalidMediaType(e) => new Exception(e.message)
+      case InvalidRequest(e) => new Exception(e.message)
+      case InvalidResponse(e) => new Exception(e.message)
+      case BodyEncodeError(e) => e.cause.fold(new Exception(e.message))(c => new Exception(e.message, c))
+      case BodyDecodeError(e) => e.cause.fold(new Exception(e.message))(c => new Exception(e.message, c))
+      case InvalidCookie(e) => new Exception(e.message)
       case NetworkError(m, Some(cause)) => new Exception(m, cause)
       case NetworkError(m, None) => new Exception(m)
       case TimeoutError(m) => new Exception(s"Timeout: $m")

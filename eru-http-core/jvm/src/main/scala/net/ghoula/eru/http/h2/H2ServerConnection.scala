@@ -177,42 +177,45 @@ final class H2ServerConnection private (
     *   Eru effect with a ByteBuffer containing the complete frame
     */
   private def readFrameBytes(maxFrameSize: Int): Eru[H2Error, ByteBuffer] = {
+    // Phase 1: Read and parse frame header
     Eru.effect {
       readBuffer.clear()
-
-      // Read frame header (9 bytes)
       readBuffer.limit(H2Frame.HeaderSize)
       readExactly(H2Frame.HeaderSize)
 
-      // Parse length and type from header
       val length = ((readBuffer.get(0) & 0xff) << 16) |
         ((readBuffer.get(1) & 0xff) << 8) |
         (readBuffer.get(2) & 0xff)
       val frameType = readBuffer.get(3) & 0xff
-
-      // Check frame size before reading payload per RFC 9113 Section 4.2
+      (length, frameType)
+    }.mapError { e =>
+      H2Error.NetworkError(s"Failed to read frame: ${e.getMessage}", Some(e))
+    }.flatMap { case (length, frameType) =>
+      // Phase 2: Check frame size per RFC 9113 Section 4.2
       if length > maxFrameSize then {
-        // Frame too large - drain the oversized frame data first
-        drainOversizedFrame(length)
-        throw new FrameSizeException(length, maxFrameSize, frameType)
+        Eru.effect { drainOversizedFrame(length) }.mapError { e =>
+          H2Error.NetworkError(s"Failed to drain oversized frame: ${e.getMessage}", Some(e))
+        }.flatMap { _ =>
+          Eru.fail(
+            H2Error.ProtocolViolation(
+              s"Frame size $length exceeds maximum $maxFrameSize (frame type: $frameType)",
+              H2ErrorCode.FrameSizeError
+            )
+          )
+        }
+      } else {
+        // Phase 3: Read frame payload
+        Eru.effect {
+          if length > 0 then {
+            readBuffer.limit(H2Frame.HeaderSize + length)
+            readExactly(H2Frame.HeaderSize + length)
+          }
+          readBuffer.flip()
+          readBuffer
+        }.mapError { e =>
+          H2Error.NetworkError(s"Failed to read frame: ${e.getMessage}", Some(e))
+        }
       }
-
-      // Read frame payload
-      if length > 0 then {
-        readBuffer.limit(H2Frame.HeaderSize + length)
-        readExactly(H2Frame.HeaderSize + length)
-      }
-
-      readBuffer.flip()
-      readBuffer
-    }.mapError {
-      case e: FrameSizeException =>
-        H2Error.ProtocolViolation(
-          s"Frame size ${e.actualSize} exceeds maximum ${e.maxSize} (frame type: ${e.frameType})",
-          H2ErrorCode.FrameSizeError
-        )
-      case e =>
-        H2Error.NetworkError(s"Failed to read frame: ${e.getMessage}", Some(e))
     }
   }
 
@@ -232,10 +235,6 @@ final class H2ServerConnection private (
       }
     }
   }
-
-  /** Exception for frame size violations. */
-  private class FrameSizeException(val actualSize: Int, val maxSize: Int, val frameType: Int)
-      extends Exception(s"Frame size $actualSize exceeds maximum $maxSize")
 
   /** Read exactly n bytes from the channel. */
   private def readExactly(n: Int): Unit = {

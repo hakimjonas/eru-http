@@ -214,9 +214,9 @@ enum H2Error {
   }
 
   /** Convert this error to an exception. */
-  def toException: H2Exception = this match {
-    case NetworkError(_, cause) => H2Exception(errorMessage, cause)
-    case _ => H2Exception(errorMessage, None)
+  def toException: Exception = this match {
+    case NetworkError(_, cause) => cause.fold(new Exception(errorMessage))(c => new Exception(errorMessage, c))
+    case _ => new Exception(errorMessage)
   }
 
   /** Get the H2 error code for this error, if applicable. */
@@ -235,4 +235,4 @@ enum H2Error {
 }
 
 /** Exception wrapper for HTTP/2 errors. */
-final case class H2Exception(message: String, cause: Option[Throwable] = None) extends Exception(message, cause.getOrElse(null))
+final case class H2Exception(message: String, cause: Option[Throwable] = None)

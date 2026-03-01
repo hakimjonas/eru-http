@@ -146,33 +146,33 @@ object Middleware {
       r1 <- resp
         .setHeader("Access-Control-Allow-Origin", config.allowedOrigins.mkString(", "))
         .mapError {
-          case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
-          case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+          case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
+          case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
         }
       r2 <- r1
         .setHeader("Access-Control-Allow-Methods", config.allowedMethods.map(_.value).mkString(", "))
         .mapError {
-          case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
-          case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+          case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
+          case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
         }
       r3 <- r2
         .setHeader("Access-Control-Allow-Headers", config.allowedHeaders.mkString(", "))
         .mapError {
-          case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
-          case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+          case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
+          case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
         }
       r4 <-
         if config.allowCredentials then
           r3.setHeader("Access-Control-Allow-Credentials", "true").mapError {
-            case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+            case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
             case e: HeaderValue.InvalidHeaderValue =>
-              HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+              HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
           }
         else Eru.succeed(r3)
       r5 <- config.maxAge.fold(Eru.succeed(r4)) { age =>
         r4.setHeader("Access-Control-Max-Age", age.toString).mapError {
-          case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
-          case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+          case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
+          case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
         }
       }
     } yield r5
@@ -237,8 +237,8 @@ object Middleware {
     */
   def defaultUnauthorized(challenge: String = "Bearer"): Eru[HttpError, Response[Body]] =
     Response.unauthorized(challenge, Body.empty).mapError {
-      case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
-      case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+      case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
+      case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
     }
 
   /** Add request ID to all requests and responses.
@@ -257,8 +257,8 @@ object Middleware {
       val requestId = UUID.randomUUID().toString
       handler(req).flatMap { resp =>
         resp.setHeader(headerName, requestId).mapError {
-          case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
-          case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.getMessage, "RFC 9110"))
+          case e: HeaderName.InvalidHeaderName => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
+          case e: HeaderValue.InvalidHeaderValue => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9110"))
         }
       }
     }
@@ -381,7 +381,7 @@ object Middleware {
             encoding match {
               case Some(enc) if enc != ContentEncoding.Identity =>
                 compressResponse(resp, enc).mapError(e =>
-                  HttpError.NetworkError(s"Compression failed: ${e.getMessage}", Some(e))
+                  HttpError.NetworkError(s"Compression failed: ${e.message}", e.cause)
                 )
               case _ =>
                 Eru.succeed(resp)
@@ -419,9 +419,9 @@ object Middleware {
             .map(_.copy(body = Body.Binary(compressed, mediaType)))
             .mapError {
               case e: HeaderName.InvalidHeaderName =>
-                Compression.CompressionError(e.getMessage, Some("Invalid header name"))
+                Compression.CompressionError(e.message, Some("Invalid header name"))
               case e: HeaderValue.InvalidHeaderValue =>
-                Compression.CompressionError(e.getMessage, Some("Invalid header value"))
+                Compression.CompressionError(e.message, Some("Invalid header value"))
             }
         }
 
@@ -433,9 +433,9 @@ object Middleware {
             .map(_.copy(body = Body.Binary(compressed, mediaType)))
             .mapError {
               case e: HeaderName.InvalidHeaderName =>
-                Compression.CompressionError(e.getMessage, Some("Invalid header name"))
+                Compression.CompressionError(e.message, Some("Invalid header name"))
               case e: HeaderValue.InvalidHeaderValue =>
-                Compression.CompressionError(e.getMessage, Some("Invalid header value"))
+                Compression.CompressionError(e.message, Some("Invalid header value"))
             }
         }
 
@@ -457,9 +457,9 @@ object Middleware {
               }
               .mapError {
                 case e: HeaderName.InvalidHeaderName =>
-                  Compression.CompressionError(e.getMessage, Some("Invalid header name"))
+                  Compression.CompressionError(e.message, Some("Invalid header name"))
                 case e: HeaderValue.InvalidHeaderValue =>
-                  Compression.CompressionError(e.getMessage, Some("Invalid header value"))
+                  Compression.CompressionError(e.message, Some("Invalid header value"))
               }
           }
         }.mapError(e => Compression.CompressionError(e.toString, None))

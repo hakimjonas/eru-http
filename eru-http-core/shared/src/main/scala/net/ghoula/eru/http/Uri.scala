@@ -84,69 +84,70 @@ object Uri {
     if uri.isEmpty then {
       Eru.fail(InvalidUri(uri, "URI cannot be empty"))
     } else {
-      Eru.effect {
-        var pos = 0
-        val len = uri.length
+      // Phase 1: Parse scheme and locate authority boundary (pure computation, no errors)
+      val len = uri.length
+      var pos = 0
 
-        // Parse scheme (if present)
-        // scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
-        var schemeOpt: Option[String] = None
-        val colonIdx = uri.indexOf(':')
-        if colonIdx > 0 then {
-          val potentialScheme = uri.substring(0, colonIdx)
-          if isValidScheme(potentialScheme) then {
-            schemeOpt = Some(potentialScheme.toLowerCase)
-            pos = colonIdx + 1
-          }
+      var schemeOpt: Option[String] = None
+      val colonIdx = uri.indexOf(':')
+      if colonIdx > 0 then {
+        val potentialScheme = uri.substring(0, colonIdx)
+        if isValidScheme(potentialScheme) then {
+          schemeOpt = Some(potentialScheme.toLowerCase)
+          pos = colonIdx + 1
         }
+      }
 
-        // Parse authority (if present - starts with "//")
-        var authorityOpt: Option[Authority] = None
+      // Phase 2: Parse authority if present (can fail)
+      val authorityEru: Eru[InvalidUri, (Option[Authority], Int)] =
         if pos < len - 1 && uri.charAt(pos) == '/' && uri.charAt(pos + 1) == '/' then {
-          pos += 2
-          val authorityStart = pos
+          val authorityStart = pos + 2
+          var authorityEnd = authorityStart
+          while authorityEnd < len && uri.charAt(authorityEnd) != '/' && uri.charAt(authorityEnd) != '?' && uri.charAt(
+              authorityEnd
+            ) != '#'
+          do {
+            authorityEnd += 1
+          }
+          val authorityStr = uri.substring(authorityStart, authorityEnd)
+          parseAuthority(authorityStr, uri) match {
+            case Right(auth) => Eru.succeed((Some(auth), authorityEnd))
+            case Left(err) => Eru.fail(err)
+          }
+        } else {
+          Eru.succeed((None, pos))
+        }
 
-          // Find end of authority (next /, ?, #, or end of string)
-          while pos < len && uri.charAt(pos) != '/' && uri.charAt(pos) != '?' && uri.charAt(pos) != '#' do {
-            pos += 1
+      // Phase 3: Parse path, query, fragment (pure computation after authority)
+      authorityEru.flatMap { case (authorityOpt, afterAuthority) =>
+        Eru.effect {
+          var p = afterAuthority
+
+          // Parse path
+          val pathStart = p
+          while p < len && uri.charAt(p) != '?' && uri.charAt(p) != '#' do { p += 1 }
+          val path = if p > pathStart then uri.substring(pathStart, p) else ""
+
+          // Parse query (if present)
+          var queryOpt: Option[String] = None
+          if p < len && uri.charAt(p) == '?' then {
+            p += 1
+            val queryStart = p
+            while p < len && uri.charAt(p) != '#' do { p += 1 }
+            queryOpt = Some(uri.substring(queryStart, p))
           }
 
-          val authorityStr = uri.substring(authorityStart, pos)
-          authorityOpt = parseAuthority(authorityStr, uri) match {
-            case Right(auth) => Some(auth)
-            case Left(err) => throw err // Will be caught by mapError below
+          // Parse fragment (if present)
+          var fragmentOpt: Option[String] = None
+          if p < len && uri.charAt(p) == '#' then {
+            p += 1
+            fragmentOpt = Some(uri.substring(p))
           }
-        }
 
-        // Parse path
-        val pathStart = pos
-        while pos < len && uri.charAt(pos) != '?' && uri.charAt(pos) != '#' do {
-          pos += 1
+          Components(schemeOpt, authorityOpt, path, queryOpt, fragmentOpt)
+        }.mapError { e =>
+          InvalidUri(uri, Option(e.getMessage).getOrElse("Invalid URI"))
         }
-        val path = if pos > pathStart then uri.substring(pathStart, pos) else ""
-
-        // Parse query (if present)
-        var queryOpt: Option[String] = None
-        if pos < len && uri.charAt(pos) == '?' then {
-          pos += 1
-          val queryStart = pos
-          while pos < len && uri.charAt(pos) != '#' do {
-            pos += 1
-          }
-          queryOpt = Some(uri.substring(queryStart, pos))
-        }
-
-        // Parse fragment (if present)
-        var fragmentOpt: Option[String] = None
-        if pos < len && uri.charAt(pos) == '#' then {
-          pos += 1
-          fragmentOpt = Some(uri.substring(pos))
-        }
-
-        Components(schemeOpt, authorityOpt, path, queryOpt, fragmentOpt)
-      }.mapError {
-        case e: InvalidUri => e
-        case e: Throwable => InvalidUri(uri, Option(e.getMessage).getOrElse("Invalid URI"))
       }
     }
   }
@@ -422,5 +423,7 @@ object Uri {
     value: String,
     reason: String,
     rfc: String = "RFC 3986"
-  ) extends Exception(s"Invalid URI '$value': $reason ($rfc)")
+  ) {
+    def message: String = s"Invalid URI '$value': $reason ($rfc)"
+  }
 }

@@ -9,11 +9,11 @@ This directory contains automated workflows for eru-http.
 
 Runs on every push and PR to ensure code quality:
 - **Build Matrix**: Tests on Ubuntu, macOS, and Windows
-- **Java Version**: 21 (Temurin distribution)
-- **Scala Version**: 3.7.3
+- **Java Version**: 25 (Temurin distribution)
+- **Scala Version**: 3.8.2
 - **Steps**:
   1. Checkout code with full history
-  2. Setup Java 21 with SBT caching
+  2. Setup Java 25 with SBT caching
   3. Compile project with `sbt compile`
   4. Run tests with `sbt test`
   5. Check code formatting (Linux only)

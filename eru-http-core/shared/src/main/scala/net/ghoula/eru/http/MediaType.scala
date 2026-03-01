@@ -399,5 +399,7 @@ object MediaType {
     value: String,
     reason: String,
     rfc: String = "RFC 9110 Section 8.3.1"
-  ) extends Exception(s"Invalid media type '$value': $reason ($rfc)")
+  ) {
+    def message: String = s"Invalid media type '$value': $reason ($rfc)"
+  }
 }

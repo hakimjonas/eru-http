@@ -25,8 +25,6 @@ import net.ghoula.eru.prelude.*
   *   - Kernel-level load balancing across acceptors
   *   - Each acceptor has its own blocking ServerSocketChannel on a Virtual Thread
   *   - Enabled automatically when acceptorThreads > 1
-  *
-  * Compare to NettyHttpServer: ~150 lines vs 332 lines (55% reduction)
   */
 private[server] final class NativeHttpServer(
   config: HttpServerConfig,
@@ -580,13 +578,6 @@ private[server] object NativeHttpServer {
   }
 
   /** Create a native HTTP server.
-    *
-    * This is dramatically simpler than NettyHttpServer.create:
-    *   - No EventLoopGroups to manage
-    *   - No Bootstrap configuration
-    *   - No ChannelPipeline setup
-    *   - No ChannelHandlers
-    *   - Just pure Eru effects + blocking NIO
     *
     * With acceptorThreads > 1, creates multiple ServerSocketChannels with SO_REUSEPORT for
     * kernel-level load balancing (Linux 3.9+). Each acceptor runs its own accept loop.
