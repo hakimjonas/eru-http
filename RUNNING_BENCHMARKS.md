@@ -2,7 +2,7 @@
 
 **Date**: November 13, 2025
 **Context**: Benchmarking eru-http client with Ref-based connection pooling
-**Strategy**: See `HTTP_CLIENT_BENCHMARKING_STRATEGY.md`
+**Strategy**: See benchmark scenarios below
 
 ---
 
@@ -320,17 +320,13 @@ After running all benchmarks, verify:
 1. **Run all benchmarks**: Follow quick start guide
 2. **Document results**: Record throughput, latency, success rates
 3. **Compare baselines**: If available, compare with sttp/http4s
-4. **Update validation report**: Add findings to `ERU_REF_VALIDATION.md`
-5. **Tune if needed**: Adjust pool sizes, timeouts based on results
+4. **Tune if needed**: Adjust pool sizes, timeouts based on results
 6. **CI integration**: Consider adding performance regression tests
 
 ---
 
 ## See Also
 
-- `HTTP_CLIENT_BENCHMARKING_STRATEGY.md` - Detailed methodology and rationale
-- `CONNECTION_POOL_DESIGN.md` - Architecture and design decisions
-- `ERU_REF_VALIDATION.md` - Eru Ref validation findings
 - `examples/ConnectionPoolBenchmark.scala` - Original simple benchmark
 - `examples/ConnectionPoolBenchmarkEnhanced.scala` - Enhanced 5-scenario benchmark
 - `examples/InstrumentedConnectionPool.scala` - Metrics collection wrapper

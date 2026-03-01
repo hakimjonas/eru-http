@@ -99,7 +99,6 @@ eru-http inherits and extends the Eru manifesto's four pillars, applying them sp
 
 2. **Framework Responsibilities**:
    - No routing DSL
-   - No middleware chains
    - No dependency injection
    - No configuration management
 
@@ -118,7 +117,6 @@ eru-http inherits and extends the Eru manifesto's four pillars, applying them sp
 - **RFC 9113**: HTTP/2
 - **RFC 8999**: HTTP/3 (future)
 - **RFC 6455**: WebSocket Protocol
-- **RFC 7540**: HTTP/2
 - **RFC 7541**: HPACK Header Compression
 
 ### Type Hierarchy
@@ -149,13 +147,26 @@ object Method {
 
 ```scala
 enum HttpError {
-  case InvalidRequest(details: String, rfc: String)
-  case InvalidResponse(details: String, rfc: String)
-  case ProtocolViolation(details: String, rfc: String)
-  case ConnectionError(cause: Throwable)
-  case TimeoutError(duration: Duration, operation: String)
+  case InvalidMethod(error: Method.InvalidMethod)
+  case InvalidStatusCode(error: StatusCode.InvalidStatusCode)
+  case InvalidUri(error: Uri.InvalidUri)
+  case InvalidMediaType(error: MediaType.InvalidMediaType)
+  case InvalidRequest(error: http.InvalidRequest)
+  case InvalidResponse(error: http.InvalidResponse)
+  case BodyEncodeError(error: http.EncodeError)
+  case BodyDecodeError(error: http.DecodeError)
+  case InvalidCookie(error: Cookie.InvalidCookie)
+  case NetworkError(msg: String, cause: Option[Throwable] = None)
+  case TimeoutError(msg: String)
+  case ConnectionError(msg: String, cause: Option[Throwable] = None)
+  case ProtocolError(msg: String, rfc: String)
+
+  def message: String = this match { ... }
+  def toException: Exception = this match { ... }
 }
 ```
+
+Errors are pure data — they never extend `Exception`. The `message` method provides human-readable descriptions, and `toException` creates a JVM `Exception` only at interop boundaries.
 
 ## Usage Examples
 

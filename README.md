@@ -481,7 +481,7 @@ See [BENCHMARKING.md](BENCHMARKING.md) for testing guide.
 ## Requirements
 
 - **Scala:** 3.8.2 or higher
-- **JVM:** Java 25 or higher (ZGC recommended)
+- **JVM:** Java 25 or higher (ZGC required — G1GC has known SIGSEGV crashes with Virtual Threads)
 - **Dependencies:**
   - Eru (effect system)
   - Valar (validation)

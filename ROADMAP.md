@@ -4,7 +4,7 @@
 
 ## Project Status: 🟢 HTTP/1.1 + HTTP/2 + TLS + WebSocket Complete
 
-**Current Version**: 0.0.1-SNAPSHOT
+**Current Version**: 1.0.0 (unreleased)
 **Progress**: Full HTTP/1.1 + HTTP/2 stack with TLS/HTTPS and RFC 6455 WebSocket support
 
 ---
@@ -92,7 +92,7 @@
 
 ### Compression Middleware ✅
 
-**Completed**: Full implementation in `Middleware.scala:356-467`
+**Completed**: Full implementation in `Middleware.scala`
 
 - ✅ Inspects `Accept-Encoding` request header
 - ✅ Compresses response body (gzip, deflate, brotli)
@@ -108,7 +108,7 @@
 
 ### Client Decompression ✅
 
-**Completed**: Full implementation in `NativeHttpClient.scala:278-366`
+**Completed**: Full implementation in `NativeHttpClient.scala`
 
 - ✅ Inspects `Content-Encoding` response header
 - ✅ Decompresses gzip, deflate, brotli automatically
@@ -234,8 +234,6 @@
 - **Idle connection eviction** - Pool doesn't evict stale connections
 - **DNS caching** - New socket per connection, no DNS cache
 - **Rate limiting middleware** - Request throttling
-- **CORS middleware** - Cross-origin resource sharing
-- **Auth middleware** - JWT, OAuth, Basic Auth
 
 ---
 
@@ -253,9 +251,8 @@
 
 - ✅ ScalaDoc for all public types
 - ✅ Inline RFC references in code
+- ✅ Client and server examples (8 examples in `examples/`)
 - ❌ User guide (pending)
-- ❌ Client examples (pending)
-- ❌ Server examples (pending)
 
 ---
 
