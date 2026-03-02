@@ -78,16 +78,35 @@ val forgejoHost = sys.env.getOrElse("FORGEJO_HOST", "localhost")
 val forgejoUrl = s"http://$forgejoHost:3000"
 
 // Publishing settings
-ThisBuild / publishTo := Some(
-  ("local-forgejo" at s"$forgejoUrl/api/packages/hakim/maven").withAllowInsecureProtocol(true)
-)
+ThisBuild / publishTo := {
+  if (sys.env.contains("CODEBERG_TOKEN"))
+    Some("codeberg" at "https://codeberg.org/api/packages/hakim/maven")
+  else
+    Some(("local-forgejo" at s"$forgejoUrl/api/packages/hakim/maven").withAllowInsecureProtocol(true))
+}
 ThisBuild / publishMavenStyle := true
 ThisBuild / Test / publishArtifact := false
 
-// Forgejo Packages resolver for Eru dependencies
-ThisBuild / resolvers += ("local-forgejo" at s"$forgejoUrl/api/packages/hakim/maven").withAllowInsecureProtocol(true)
+// Resolvers: Codeberg Packages (HTTPS) + local Forgejo (HTTP)
+ThisBuild / resolvers ++= Seq(
+  "codeberg" at "https://codeberg.org/api/packages/hakim/maven",
+  ("local-forgejo" at s"$forgejoUrl/api/packages/hakim/maven").withAllowInsecureProtocol(true)
+)
 
-// Forgejo Packages authentication via FORGEJO_TOKEN env var
+// Codeberg Packages authentication via CODEBERG_TOKEN env var
+ThisBuild / credentials ++= sys.env
+  .get("CODEBERG_TOKEN")
+  .map { token =>
+    Credentials(
+      "Gitea Package API",
+      "codeberg.org",
+      "hakim",
+      token
+    )
+  }
+  .toSeq
+
+// Local Forgejo Packages authentication via FORGEJO_TOKEN env var
 ThisBuild / credentials ++= sys.env
   .get("FORGEJO_TOKEN")
   .map { token =>
