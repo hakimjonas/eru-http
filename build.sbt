@@ -78,12 +78,14 @@ val forgejoHost = sys.env.getOrElse("FORGEJO_HOST", "localhost")
 val forgejoUrl = s"http://$forgejoHost:3000"
 
 // Publishing settings
-ThisBuild / publishTo := Some("local-forgejo" at s"$forgejoUrl/api/packages/hakim/maven")
+ThisBuild / publishTo := Some(
+  ("local-forgejo" at s"$forgejoUrl/api/packages/hakim/maven").withAllowInsecureProtocol(true)
+)
 ThisBuild / publishMavenStyle := true
 ThisBuild / Test / publishArtifact := false
 
 // Forgejo Packages resolver for Eru dependencies
-ThisBuild / resolvers += "local-forgejo" at s"$forgejoUrl/api/packages/hakim/maven"
+ThisBuild / resolvers += ("local-forgejo" at s"$forgejoUrl/api/packages/hakim/maven").withAllowInsecureProtocol(true)
 
 // Forgejo Packages authentication via FORGEJO_TOKEN env var
 ThisBuild / credentials ++= sys.env
