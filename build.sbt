@@ -6,6 +6,7 @@ ThisBuild / scalaVersion := "3.8.2"
 ThisBuild / semanticdbEnabled := true
 ThisBuild / semanticdbVersion := scalafixSemanticdb.revision
 ThisBuild / organization := "net.ghoula"
+ThisBuild / versionScheme := Some("early-semver")
 ThisBuild / organizationName := "Hakim Ghoula"
 ThisBuild / licenses := List("MIT" -> url("https://opensource.org/licenses/MIT"))
 ThisBuild / developers := List(
