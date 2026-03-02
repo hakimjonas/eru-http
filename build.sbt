@@ -73,40 +73,30 @@ val jvmRunOptions = {
 ThisBuild / run / javaOptions ++= jvmRunOptions
 ThisBuild / Test / javaOptions ++= jvmRunOptions
 
-// Publishing settings
-ThisBuild / publishTo := {
-  val nexus = "https://oss.sonatype.org/"
-  if (isSnapshot.value)
-    Some("snapshots" at nexus + "content/repositories/snapshots")
-  else
-    Some("releases" at nexus + "service/local/staging/deploy/maven2")
-}
+// Forgejo Packages — localhost for local dev, forgejo:3000 in CI containers
+val forgejoHost = sys.env.getOrElse("FORGEJO_HOST", "localhost")
+val forgejoUrl = s"http://$forgejoHost:3000"
 
+// Publishing settings
+ThisBuild / publishTo := Some("local-forgejo" at s"$forgejoUrl/api/packages/hakim/maven")
+ThisBuild / publishMavenStyle := true
 ThisBuild / Test / publishArtifact := false
 
-// GitHub Packages resolver for Eru dependencies (CI only)
-ThisBuild / resolvers ++= {
-  if (sys.env.contains("GITHUB_TOKEN") && sys.env("GITHUB_TOKEN").nonEmpty) {
-    Seq("GitHub Package Registry (hakimjonas/eru)" at "https://maven.pkg.github.com/hakimjonas/eru")
-  } else {
-    Seq.empty
-  }
-}
+// Forgejo Packages resolver for Eru dependencies
+ThisBuild / resolvers += "local-forgejo" at s"$forgejoUrl/api/packages/hakim/maven"
 
-ThisBuild / credentials ++= {
-  if (sys.env.contains("GITHUB_TOKEN") && sys.env("GITHUB_TOKEN").nonEmpty) {
-    Seq(
-      Credentials(
-        "GitHub Package Registry",
-        "maven.pkg.github.com",
-        sys.env.getOrElse("GITHUB_ACTOR", "hakimjonas"),
-        sys.env("GITHUB_TOKEN")
-      )
+// Forgejo Packages authentication via FORGEJO_TOKEN env var
+ThisBuild / credentials ++= sys.env
+  .get("FORGEJO_TOKEN")
+  .map { token =>
+    Credentials(
+      "Gitea Package API",
+      forgejoHost,
+      "hakim",
+      token
     )
-  } else {
-    Seq.empty
   }
-}
+  .toSeq
 
 // Assembly merge strategy (applied to all subprojects)
 ThisBuild / assembly / assemblyMergeStrategy := {
@@ -124,11 +114,11 @@ lazy val commonSettings = Seq(
   testFrameworks += new TestFramework("munit.Framework")
 )
 
-// Eru dependency version (for CI)
-val eruVersion = "0.0.0+348-cdca2cd4"
+// Eru dependency version
+val eruVersion = "0.9.0"
 
-// Check if we're in CI (GITHUB_TOKEN is set) or local development
-val useLocalEru = !sys.env.contains("GITHUB_TOKEN") || sys.env("GITHUB_TOKEN").isEmpty
+// Use local Eru source (ProjectRef) when available, published artifacts otherwise
+val useLocalEru = file("../eru/build.sbt").exists()
 
 // Root project
 lazy val root = (project in file("."))

@@ -1,0 +1,32 @@
+name: Scala CI
+
+on:
+  push:
+    branches: [main, http2]
+  pull_request:
+    branches: [main]
+
+env:
+  JAVA_OPTS: "-Xms2G -Xmx6G -XX:+UseZGC -XX:ReservedCodeCacheSize=512m -XX:CICompilerCount=2"
+  SBT_OPTS: "-Xms2G -Xmx6G -XX:+UseZGC -XX:ReservedCodeCacheSize=512m -XX:CICompilerCount=2"
+  FORGEJO_HOST: "forgejo"
+  FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+
+jobs:
+  build:
+    runs-on: codeberg-medium
+    steps:
+      - name: Checkout
+        run: |
+          git clone --depth 1 --branch "${GITHUB_REF_NAME}" "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" .
+          git checkout "${GITHUB_SHA}"
+
+      - name: Check formatting
+        run: sbt check
+
+      - name: Compile
+        run: sbt compile
+
+      - name: Run tests
+        run: sbt test
+        timeout-minutes: 10
