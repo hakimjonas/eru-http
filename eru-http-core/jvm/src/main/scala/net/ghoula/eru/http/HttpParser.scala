@@ -185,7 +185,10 @@ object HttpParser {
     * RFC 9112 Section 5: header-field = field-name ":" OWS field-value OWS
     */
   private def readHeadersBuffered(reader: BufferedSocketReader): Eru[HttpError, Headers] = {
-    def loop(headers: Headers, bytesRead: Int): Eru[HttpError, Headers] = {
+    def loop(
+      pairs: List[(String, HeaderValue)],
+      bytesRead: Int
+    ): Eru[HttpError, List[(String, HeaderValue)]] = {
       if bytesRead > MAX_HEADERS_SIZE then {
         Eru.fail(
           HttpError.InvalidRequest(
@@ -199,20 +202,29 @@ object HttpParser {
         readLineBuffered(reader).flatMap { line =>
           if line.isEmpty then {
             // Empty line marks end of headers
-            Eru.succeed(headers)
+            Eru.succeed(pairs)
           } else {
             parseHeaderLine(line).flatMap { case (name, value) =>
-              headers
-                .add(name, value)
+              HeaderName
+                .parse(name)
                 .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid header: $e", "RFC 9110 Section 5.5")))
-                .flatMap(newHeaders => loop(newHeaders, bytesRead + line.length + 2))
+                .flatMap { _ =>
+                  HeaderValue
+                    .parse(value)
+                    .mapError(e =>
+                      HttpError.InvalidRequest(InvalidRequest(s"Invalid header: $e", "RFC 9110 Section 5.5"))
+                    )
+                    .flatMap { hv =>
+                      loop(pairs :+ (name, hv), bytesRead + line.length + 2)
+                    }
+                }
             }
           }
         }
       }
     }
 
-    loop(Headers.empty, 0)
+    loop(List.empty, 0).map(Headers.fromValidatedPairs)
   }
 
   /** Parse a single header line: "Content-Type: application/json"

@@ -138,6 +138,13 @@ final case class Headers(private val underlying: TreeMap[CIString, List[HeaderVa
       values.map(v => (name.original, v.value))
     }.toList
 
+  /** Iterates all header name-value pairs without allocating an intermediate collection.
+    */
+  def foreach(f: (String, String) => Unit): Unit =
+    underlying.foreachEntry { (name, values) =>
+      values.foreach(v => f(name.original, v.value))
+    }
+
   /** Combines two Headers collections. Values from the other Headers are appended to this one.
     */
   def ++(other: Headers): Headers = {
@@ -241,6 +248,24 @@ object Headers {
         updated <- acc.add(name, value)
       } yield updated
     }
+  }
+
+  /** Builds Headers from pre-validated name/value pairs in a single TreeMap pass. Used by parsers
+    * that validate each header individually then build the collection once, avoiding N intermediate
+    * TreeMap copies.
+    */
+  private[http] def fromValidatedPairs(
+    pairs: List[(String, HeaderValue)]
+  ): Headers = {
+    val tree = pairs.foldLeft(TreeMap.empty[CIString, List[HeaderValue]](using CIString.ordering)) {
+      case (acc, (name, hv)) =>
+        val key = CIString(name)
+        acc.get(key) match {
+          case Some(existing) => acc.updated(key, existing :+ hv)
+          case None => acc.updated(key, List(hv))
+        }
+    }
+    Headers(tree)
   }
 
   /** Creates headers from pre-validated constants. Only use with known-valid header names and

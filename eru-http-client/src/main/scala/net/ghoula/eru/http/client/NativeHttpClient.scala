@@ -60,18 +60,12 @@ private[client] final class NativeHttpClient(
 
   override def send[A](request: Request[A])(using encoder: BodyEncoder[A]): Eru[HttpError, Response[Bytes]] =
     for {
-      // Add Host header if missing (required for HTTP/1.1)
-      requestWithHost <- addHostHeaderIfNeeded(request)
+      // Add standard request headers in a single pass (Host, Connection, Accept-Encoding)
+      requestWithHeaders <- addStandardHeaders(request)
 
-      // Add Connection: keep-alive for connection pooling (if not already set)
-      requestWithConnection <- addConnectionHeaderIfNeeded(requestWithHost)
-
-      // Add Accept-Encoding header if automatic decompression is enabled
-      requestWithEncoding <- addAcceptEncodingIfNeeded(requestWithConnection)
-
-      _ <- requestWithEncoding.validate.mapError(HttpError.InvalidRequest.apply)
-      encodedBody <- encoder.encode(requestWithEncoding.body).mapError(HttpError.BodyEncodeError.apply)
-      encodedRequest = requestWithEncoding.copy(body = encodedBody)
+      _ <- requestWithHeaders.validate.mapError(HttpError.InvalidRequest.apply)
+      encodedBody <- encoder.encode(requestWithHeaders.body).mapError(HttpError.BodyEncodeError.apply)
+      encodedRequest = requestWithHeaders.copy(body = encodedBody)
 
       // Apply request interceptors
       interceptedRequest <- requestInterceptors.foldLeft(Eru.succeed(encodedRequest)) { (req, interceptor) =>
@@ -342,11 +336,19 @@ private[client] final class NativeHttpClient(
         HttpError.ProtocolError(s"Invalid status code $statusInt: ${e.reason}", "RFC 9113 Section 8.3.2")
       )
 
-      // Convert headers (filter out pseudo-headers)
+      // Convert headers (filter out pseudo-headers) — single TreeMap build
       httpHeaders <- responseHeaders.filter { case (name, _) => !name.startsWith(":") }
-        .foldLeft(Eru.succeed(Headers.empty): Eru[HttpError, Headers]) { case (acc, (name, value)) =>
-          acc.flatMap(_.add(name, value).mapError(e => HttpError.ProtocolError(s"Invalid header: $e", "RFC 9113")))
+        .foldLeft(Eru.succeed(List.empty[(String, HeaderValue)]): Eru[HttpError, List[(String, HeaderValue)]]) {
+          case (accEru, (name, value)) =>
+            accEru.flatMap { acc =>
+              HeaderName
+                .parse(name)
+                .flatMap(_ => HeaderValue.parse(value))
+                .mapError(e => HttpError.ProtocolError(s"Invalid header: $e", "RFC 9113"))
+                .map(hv => acc :+ (name, hv))
+            }
         }
+        .map(Headers.fromValidatedPairs)
 
       // Build response
       bodyBytes = responseBody.getOrElse(Array.empty[Byte])
@@ -658,56 +660,60 @@ private[client] final class NativeHttpClient(
     }
   }
 
-  /** Add Host header to request if not already present (required for HTTP/1.1)
+  /** Add standard request headers (Host, Connection, Accept-Encoding) in a single TreeMap update.
+    * Collects all headers to add, validates them, then builds one updated Headers via
+    * fromValidatedPairs.
     */
-  private def addHostHeaderIfNeeded[A](request: Request[A]): Eru[HttpError, Request[A]] = {
-    if request.headers.contains(HeaderNames.Host) then {
-      Eru.succeed(request)
-    } else {
-      for {
-        host <- Eru.fromOption(
-          request.uri.host,
-          HttpError.InvalidRequest(InvalidRequest("Missing host in URI", "RFC 9110"))
-        )
-        port <- getPort(request.uri)
-        hostValue = if port == 80 || port == 443 then host else s"$host:$port"
-        newHeaders <- request.headers
-          .add(HeaderNames.Host, hostValue)
-          .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Host header: $e", "RFC 9110")))
-      } yield request.copy(headers = newHeaders)
-    }
-  }
+  private def addStandardHeaders[A](request: Request[A]): Eru[HttpError, Request[A]] = {
+    for {
+      // Collect headers to add
+      hostPair <-
+        if request.headers.contains(HeaderNames.Host) then Eru.succeed(List.empty[(String, String)])
+        else {
+          for {
+            host <- Eru.fromOption(
+              request.uri.host,
+              HttpError.InvalidRequest(InvalidRequest("Missing host in URI", "RFC 9110"))
+            )
+            port <- getPort(request.uri)
+            hostValue = if port == 80 || port == 443 then host else s"$host:$port"
+          } yield List((HeaderNames.Host, hostValue))
+        }
 
-  /** Add Connection: keep-alive header if not already present (for connection pooling)
-    */
-  private def addConnectionHeaderIfNeeded[A](request: Request[A]): Eru[HttpError, Request[A]] = {
-    if request.headers.contains(HeaderNames.Connection) then {
-      Eru.succeed(request)
-    } else {
-      request.headers
-        .add(HeaderNames.Connection, "keep-alive")
-        .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Connection header: $e", "RFC 9110")))
-        .map(newHeaders => request.copy(headers = newHeaders))
-    }
-  }
+      connectionPair =
+        if request.headers.contains(HeaderNames.Connection) then List.empty
+        else List((HeaderNames.Connection, "keep-alive"))
 
-  /** Add Accept-Encoding header if automatic decompression is enabled and header not already
-    * present
-    */
-  private def addAcceptEncodingIfNeeded[A](request: Request[A]): Eru[HttpError, Request[A]] = {
-    if !config.automaticDecompression || request.headers.contains(HeaderNames.AcceptEncoding) then {
-      Eru.succeed(request)
-    } else {
-      val encodings = config.acceptEncoding.map(_.value).mkString(", ")
-      if encodings.nonEmpty then {
-        request.headers
-          .add(HeaderNames.AcceptEncoding, encodings)
-          .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid Accept-Encoding header: $e", "RFC 9110")))
-          .map(newHeaders => request.copy(headers = newHeaders))
-      } else {
-        Eru.succeed(request)
-      }
-    }
+      encodingPair =
+        if !config.automaticDecompression || request.headers.contains(HeaderNames.AcceptEncoding) then List.empty
+        else {
+          val encodings = config.acceptEncoding.map(_.value).mkString(", ")
+          if encodings.nonEmpty then List((HeaderNames.AcceptEncoding, encodings)) else List.empty
+        }
+
+      allPairs = hostPair ++ connectionPair ++ encodingPair
+
+      result <-
+        if allPairs.isEmpty then Eru.succeed(request)
+        else {
+          // Validate and build all new headers, then merge with existing
+          allPairs
+            .foldLeft(Eru.succeed(List.empty[(String, HeaderValue)]): Eru[HttpError, List[(String, HeaderValue)]]) {
+              case (accEru, (name, value)) =>
+                accEru.flatMap { acc =>
+                  HeaderName
+                    .parse(name)
+                    .flatMap(_ => HeaderValue.parse(value))
+                    .mapError(e => HttpError.InvalidRequest(InvalidRequest(s"Invalid header: $e", "RFC 9110")))
+                    .map(hv => acc :+ (name, hv))
+                }
+            }
+            .map { validatedPairs =>
+              val extra = Headers.fromValidatedPairs(validatedPairs)
+              request.copy(headers = request.headers ++ extra)
+            }
+        }
+    } yield result
   }
 
   /** Get port from URI

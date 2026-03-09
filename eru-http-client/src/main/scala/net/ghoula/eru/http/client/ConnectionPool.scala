@@ -309,25 +309,25 @@ private[client] final class NativeConnectionPool(
 
   private def getOrCreateHostSemaphore(host: String, port: Int): Eru[HttpError, Semaphore] = {
     val key = HostKey(host, port)
-    hostSemsRef.modify { sems =>
+    // Fast path: check if semaphore already exists
+    hostSemsRef.get.flatMap { sems =>
       sems.get(key) match {
-        case Some(sem) =>
-          // Already exists
-          (sems, Right(sem))
+        case Some(sem) => Eru.succeed(sem)
         case None =>
-          // Need to create new semaphore
-          (sems, Left(key))
+          // Slow path: create speculatively, then atomically insert only if still absent.
+          // Losing fibers discard their semaphore (never acquired, safe to GC).
+          for {
+            newSem <- Semaphore
+              .make(config.maxConnectionsPerHost.toLong)
+              .mapError(e => HttpError.NetworkError(s"Failed to create host semaphore: $e", None))
+            sem <- hostSemsRef.modify { currentSems =>
+              currentSems.get(key) match {
+                case Some(existing) => (currentSems, existing)
+                case None => (currentSems + (key -> newSem), newSem)
+              }
+            }
+          } yield sem
       }
-    }.flatMap {
-      case Right(sem) => Eru.succeed(sem)
-      case Left(key) =>
-        // Create new semaphore outside the modify
-        for {
-          newSem <- Semaphore
-            .make(config.maxConnectionsPerHost.toLong)
-            .mapError(e => HttpError.NetworkError(s"Failed to create host semaphore: $e", None))
-          _ <- hostSemsRef.update(sems => sems + (key -> newSem))
-        } yield newSem
     }
   }
 

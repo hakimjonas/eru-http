@@ -70,26 +70,31 @@ object HttpWriter {
       // Clear and prepare buffer
       buffer.clear()
 
-      // Build request line
+      // Write request line directly to buffer
       val requestTarget = buildRequestTarget(request.uri)
-      val requestLine = s"${request.method.value}$SP$requestTarget$SP${formatVersion(request.version)}$CRLF"
+      writeString(buffer, request.method.value)
+      buffer.put(' '.toByte)
+      writeString(buffer, requestTarget)
+      buffer.put(' '.toByte)
+      writeString(buffer, formatVersion(request.version))
+      buffer.put('\r'.toByte)
+      buffer.put('\n'.toByte)
 
-      // Build headers
-      val headersStr = buildHeaders(request.headers)
-
-      // Construct full header string
-      val fullHeaders = requestLine + headersStr + CRLF
-      val headerBytes = fullHeaders.getBytes(StandardCharsets.UTF_8)
-
-      // Check if buffer is large enough
-      if headerBytes.length > buffer.capacity() then {
-        throw new IllegalArgumentException(
-          s"Request headers (${headerBytes.length} bytes) exceed buffer capacity (${buffer.capacity()} bytes)"
-        )
+      // Write headers directly to buffer (zero allocation)
+      request.headers.foreach { (name, value) =>
+        writeString(buffer, name)
+        buffer.put(':'.toByte)
+        buffer.put(' '.toByte)
+        writeString(buffer, value)
+        buffer.put('\r'.toByte)
+        buffer.put('\n'.toByte): Unit
       }
 
-      // Write headers to buffer
-      buffer.put(headerBytes)
+      // Write empty line (end of headers)
+      buffer.put('\r'.toByte)
+      buffer.put('\n'.toByte)
+
+      // Flip buffer and write to channel
       buffer.flip()
       writeAll(channel, buffer)
     }.flatMap { _ =>
@@ -162,14 +167,14 @@ object HttpWriter {
       buffer.put('\r'.toByte)
       buffer.put('\n'.toByte)
 
-      // Write headers directly to buffer
-      response.headers.toList.foreach { case (name, value) =>
+      // Write headers directly to buffer (zero allocation)
+      response.headers.foreach { (name, value) =>
         writeString(buffer, name)
         buffer.put(':'.toByte)
         buffer.put(' '.toByte)
         writeString(buffer, value)
         buffer.put('\r'.toByte)
-        buffer.put('\n'.toByte)
+        buffer.put('\n'.toByte): Unit
       }
 
       // Write empty line (end of headers)
@@ -234,7 +239,7 @@ object HttpWriter {
     */
   private def buildHeaders(headers: Headers): String = {
     val builder = new StringBuilder
-    headers.toList.foreach { case (name, value) =>
+    headers.foreach { (name, value) =>
       builder.append(name)
       builder.append(COLON)
       builder.append(value)
