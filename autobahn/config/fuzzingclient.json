@@ -1,0 +1,16 @@
+{
+  "outdir": "/reports/server",
+  "servers": [
+    {
+      "agent": "eru-http-websocket",
+      "url": "ws://127.0.0.1:9002/ws"
+    }
+  ],
+  "cases": ["*"],
+  "exclude-cases": [
+    "9.*",
+    "12.*",
+    "13.*"
+  ],
+  "exclude-agent-cases": {}
+}

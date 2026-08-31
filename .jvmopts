@@ -1,0 +1,26 @@
+# JVM Options for Eru-HTTP Development
+# These settings optimize for development and testing performance
+
+# Heap Settings - Increased for stress tests
+-Xms4G
+-Xmx12G
+
+# Use ZGC (generational mode is default since JDK 24)
+-XX:+UseZGC
+
+# JIT Compiler optimizations  
+-XX:ReservedCodeCacheSize=256m
+-XX:InitialCodeCacheSize=64m
+
+# File encoding
+-Dfile.encoding=UTF-8
+
+# SBT specific
+-Dsbt.coursier.home=.coursier
+-Dsbt.ivy.home=.ivy2
+
+# Silence restricted-method warnings (JNA native access)
+--enable-native-access=ALL-UNNAMED
+
+# Enable compressed OOPs for memory efficiency
+-XX:+UseCompressedOops

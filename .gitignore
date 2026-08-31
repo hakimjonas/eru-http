@@ -1,0 +1,105 @@
+# Scala
+*.class
+*.log
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+*.semanticdb
+
+# sbt specific
+.cache/
+.history/
+.lib/
+dist/*
+target/
+lib_managed/
+src_managed/
+project/boot/
+project/plugins/project/
+project/target/
+project/project/target/
+build.sbt.lock
+
+# Coursier cache (as specified in .jvmopts)
+.coursier/
+.ivy2/
+
+# Cross-platform sbt builds (sbt-crossproject)
+*/.jvm/target/
+*/.js/target/
+*/.native/target/
+**/.jvm/target/
+**/.js/target/
+**/.native/target/
+
+# Scala-IDE specific
+.scala_dependencies
+.worksheet
+
+# IDE-specific
+.bsp/
+.vscode/
+.ensime_cache/
+.idea/
+.metals/
+.bloop/
+*.iml
+*.ipr
+*.iws
+*~
+metals.sbt
+
+# ENSIME specific
+.ensime_cache/
+.ensime
+
+# OS-specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+
+# Benchmark results: ignore ad-hoc runs, but commit frozen baselines explicitly.
+# Frozen baselines are named `<step>-baseline-*.json` and tied to a specific
+# commit in CLEANUP_PLAN.md; they must live in the tree so comparisons with a
+# later run are reproducible.
+benchmark-results/*.txt
+benchmark-results/*.txt.summary
+benchmark-results/*.json
+!benchmark-results/.gitkeep
+!benchmark-results/*-baseline-*.json
+!benchmark-results/*-baseline-*.json.summary
+
+# Autobahn test reports (generated)
+autobahn/reports/
+
+# JVM crash artifacts
+hs_err_pid*
+core.*
+
+# Runtime logs
+replay_*.log
+
+# Local-only working docs (design notes, audit reports)
+docs/internal/
+
+# scala-cli caches
+.scala-build/
+**/.scala-build/
