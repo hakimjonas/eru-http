@@ -21,6 +21,9 @@ private[server] final case class IpKey private (private val data: ArraySeq[Byte]
   /** Defensive copy of the raw bytes. */
   def bytes: Array[Byte] = data.toArray
 
+  /** The address as a JDK `InetAddress` — raw bytes, no DNS resolution. */
+  def toInetAddress: InetAddress = InetAddress.getByAddress(bytes)
+
   override def toString: String = {
     // Render as a parseable address string for logs and test output.
     try InetAddress.getByAddress(data.toArray).getHostAddress

@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0-alpha.2] - 2026-09
+
+Ecosystem findings from the melian work (`ecosystem-findings-from-melian.md`), items 1-8. Adds a
+fourth module: `eru-http-acme`.
+
+### Core (`eru-http-core`)
+
+- Full RFC status registry: every registered status code (1xx-5xx, RFC 9110 plus 102/207/208/226/
+  421/422/423/424/425/428/431/451/505/506/507/508/510/511), with `requiredHeaders(426) = {Upgrade}`
+  and 205 excluded from body-allowing statuses. 203/206/300/407/408/416 gained their missing reason
+  phrases.
+- `Response.tooManyRequests(retryAfter: Duration, body)` and a `Retry-After` HTTP-date overload —
+  renders non-negative `delay-seconds`, fails on negative delays (RFC 9110 Sections 15.5.14, 14.2).
+- `Response.addCookie(cookie)` — appends to `Set-Cookie`, the one field RFC 9110 Section 5.5 exempts
+  from list combination, so cookie-issuing middlewares no longer clobber each other.
+- Client address mechanism (both surfaces): a typed attributes channel
+  (`Request.AttributeKey[A]` + `Request.withAttribute`/`attribute`) and
+  `Request.clientAddress: Option[ClientAddress]` carrying the resolved address with its
+  provenance (`TcpPeer`, `ProxyProtocol`, `ForwardedFor`).
+- `CanEqual` givens next to the comparable value types (`Method`, `StatusCode`, `Port`, `Uri`,
+  `HeaderName`, `HeaderValue`, `MediaType`, `Cookie`, `ETag`, `SameSite`, `HttpVersion`,
+  `ContentEncoding`, `StatusClass`, `WebSocketCloseCode`) for `-language:strictEquality` consumers.
+
+### Server (`eru-http-server`)
+
+- `Request.clientAddress` is populated for HTTP/1.1 and HTTP/2 requests from the same resolution
+  `PerIpGovernor` uses: TCP peer, PROXY-v2-derived, or leftmost-untrusted `X-Forwarded-For` behind
+  `trustedProxies` — rate limiting and this surface can never disagree.
+- WebSocket pending-handler registry leak fixed: entries are inserted only after the handshake
+  validates, claimed before the 101 is written, and reclaimed (`dropPendingFor`) when a wrapping
+  middleware discards a marked 101; a bounded registry (`MaxPendingHandlers`) caps pathological
+  composition. Covered by the new hostile `PendingHandlerRegistrySpec` (mid-handshake abort bursts).
+- `HttpServer.shutdown` doc states the CAS idempotency contract ("safe to call multiple times and
+  concurrently").
+- Hostile tests run again: sbt 2 forks test JVMs with a clean environment, so `HOSTILE=true` was
+  silently ignored; the build now forwards the opt-in flag to forked JVMs.
+
+### ACME (`eru-http-acme`, new module)
+
+- RFC 8555 client (ES256 JWS, embedded-JWK account creation, `kid` references, nonce management
+  with badNonce retry, POST-as-GET) producing `TlsConfig` from a persisted PKCS12 keystore.
+- HTTP-01 challenge responder (`AcmeHttp01`) as a handler wrapper, plus a redirect helper.
+- Provisioner (`AcmeProvisioner.start`) with cached-cert reuse and a renewal-before-expiry daemon
+  loop; staging/production/stub directory URLs via `AcmeConfig`.
+- Hand-rolled PKCS#10 CSR (SAN via `extensionRequest`) — validated by the JDK's own parser; PEM
+  encode/decode; minimal JSON for the protocol. No new external dependencies.
+
+### Dependencies
+
+- Eru bumped to `1.0.0-alpha.1` (was `1.0.0-alpha`), matching the published pairing.
+
 ## [1.0.0-alpha] - 2026-09
 
 Initial public release. The library ships in three modules.

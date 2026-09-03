@@ -392,4 +392,22 @@ class CookieSpec extends FunSuite {
     val result = SameSite.parse("Invalid")
     assert(result.isFailure)
   }
+
+  test("Response.addCookie appends and composes") {
+    val session = Cookie("sid", "abc123", httpOnly = true, sameSite = Some(SameSite.Lax))
+    val csrf = Cookie("__csrf", "token", secure = true)
+
+    val response = (for {
+      r1 <- Response.ok(Body.Empty).addCookie(session)
+      r2 <- r1.addCookie(csrf)
+    } yield r2).assertSuccess
+
+    // Set-Cookie is exempt from list combination (RFC 9110 Section 5.5): both cookies must
+    // coexist as separate values, in insertion order.
+    assertEquals(
+      response.headers.get(HeaderNames.SetCookie).map(_.map(_.value)),
+      Some(List(session.toSetCookieHeader, csrf.toSetCookieHeader))
+    )
+    response.validate.assertSuccess
+  }
 }

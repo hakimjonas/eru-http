@@ -11,6 +11,9 @@ opaque type Port = Int
 
 object Port {
 
+  /** Enables `==` under `-language:strictEquality`. */
+  given CanEqual[Port, Port] = CanEqual.derived
+
   /** Minimum valid port number. */
   val MinValue: Int = 1
 

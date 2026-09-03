@@ -20,7 +20,7 @@ import net.ghoula.eru.*
 final case class ETag(
   value: String,
   weak: Boolean = false
-) {
+) derives CanEqual {
 
   /** Serializes this ETag to its header value format.
     *

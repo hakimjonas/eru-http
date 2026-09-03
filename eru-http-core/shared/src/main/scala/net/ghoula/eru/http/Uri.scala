@@ -10,6 +10,9 @@ opaque type Uri = Uri.Components
 
 object Uri {
 
+  /** Enables `==` under `-language:strictEquality`. */
+  given CanEqual[Uri, Uri] = CanEqual.derived
+
   /** Internal representation of URI components.
     */
   final case class Components(

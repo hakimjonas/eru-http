@@ -16,14 +16,35 @@ import net.ghoula.eru.*
   *   the request body
   * @param version
   *   the HTTP version, HTTP/1.1 by default
+  * @param clientAddress
+  *   the client address the server resolved for this request (TCP peer, PROXY-protocol-derived, or
+  *   trusted-XFF-derived); `None` on client-constructed requests
+  * @param attributes
+  *   typed, server-attached attributes (request ids, trace context); they survive `copy` and the
+  *   `with*` builders
   */
 final case class Request[+A](
   method: Method,
   uri: Uri,
   headers: Headers,
   body: A,
-  version: HttpVersion = HttpVersion.HTTP_1_1
+  version: HttpVersion = HttpVersion.HTTP_1_1,
+  clientAddress: Option[ClientAddress] = None,
+  attributes: Map[AttributeKey[?], Any] = Map.empty
 ) {
+
+  /** Reads the attribute stored under `key`, if any.
+    *
+    * The key's `ClassTag` checks the stored value's runtime class, so a mis-typed store surfaces as
+    * `None` rather than a surprise `ClassCastException` at the consumer.
+    */
+  def attribute[A](key: AttributeKey[A]): Option[A] =
+    attributes.get(key).flatMap(key.classTag.unapply)
+
+  /** Attaches `value` under `key`, replacing any previous value for that key.
+    */
+  def withAttribute[B](key: AttributeKey[B], value: B): Request[A] =
+    copy(attributes = attributes.updated(key, value))
 
   /** Adds a header to the request with validation.
     */
@@ -166,6 +187,25 @@ final case class Request[+A](
   }
 }
 
+/** Typed key for [[Request.attributes]].
+  *
+  * Equality is by name plus the tag's runtime class, so two independently-created keys for the same
+  * (name, type) pair are the same key. Prefer shared constants over ad-hoc construction.
+  *
+  * @tparam A
+  *   the value type stored under this key
+  */
+final case class AttributeKey[A](name: String)(using val classTag: scala.reflect.ClassTag[A]) derives CanEqual {
+  @scala.annotation.nowarn("msg=pattern selector should be an instance of Matchable")
+  override def equals(that: Any): Boolean = that match {
+    case other: AttributeKey[?] =>
+      other.name == name && other.classTag.runtimeClass == classTag.runtimeClass
+    case _ => false
+  }
+
+  override def hashCode: Int = name.hashCode * 31 + classTag.runtimeClass.hashCode()
+}
+
 object Request {
 
   /** Creates a GET request with empty body.
@@ -196,7 +236,7 @@ object Request {
 
 /** HTTP version.
   */
-enum HttpVersion(val major: Int, val minor: Int) {
+enum HttpVersion(val major: Int, val minor: Int) derives CanEqual {
   case HTTP_1_0 extends HttpVersion(1, 0)
   case HTTP_1_1 extends HttpVersion(1, 1)
   case HTTP_2_0 extends HttpVersion(2, 0)
