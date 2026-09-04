@@ -42,7 +42,13 @@ private[server] final class NativeHttpServer(
     *   2. Enforce request-rate limits in runRequestLoop.
     * Cleared in handleClient's cleanup finalizer.
     */
-  private val clientIps = new java.util.concurrent.ConcurrentHashMap[SocketChannel, IpKey]()
+  /** Resolved connection-level client address per accepted socket, tracked for request decoration
+    * (`Request.clientAddress`) and for per-IP governance. The address is the TCP peer, or the
+    * address a PROXY v2 preamble carried (then `fromProxy` is true). Entries live exactly as long
+    * as the connection (removed in `handleClient`'s cleanup).
+    */
+  private val clientIps =
+    new java.util.concurrent.ConcurrentHashMap[SocketChannel, (java.net.InetAddress, Boolean)]()
 
   /** Replay buffer: bytes the PROXY-detection path peeked off the wire that belong to the HTTP
     * stream (i.e. when the preamble signature didn't match in Optional mode). The request loop's
@@ -178,7 +184,7 @@ private[server] final class NativeHttpServer(
       _ <- gateResult match {
         case ConnectionGate.Rejected =>
           closeQuietly(clientSocket)
-        case ConnectionGate.Accepted(clientIp) =>
+        case ConnectionGate.Accepted(address, fromProxy, trackedIp) =>
           for {
             _ <- connectionSemaphore.acquire.eru
               .mapError(e => HttpError.NetworkError(s"Failed to acquire connection permit: $e", None))
@@ -192,13 +198,13 @@ private[server] final class NativeHttpServer(
                   case _: Exception => ()
                 }
                 activeClients.put(clientSocket, java.lang.Boolean.TRUE)
-                clientIp.foreach(clientIps.put(clientSocket, _))
+                address.foreach(a => clientIps.put(clientSocket, (a, fromProxy)))
               }.mapError(e => HttpError.NetworkError(s"Socket config error: ${e.getMessage}", Some(e)))
               _ <- runtime
                 .forkTracked(
                   handleClient(clientSocket).ensure(
                     connectionSemaphore.release.eru.attempt.map { _ =>
-                      clientIp.foreach { ip => perIpGovernor.foreach(_.releaseConnection(ip)) }
+                      trackedIp.foreach { ip => perIpGovernor.foreach(_.releaseConnection(ip)) }
                     }
                   ),
                   handlerTracker
@@ -208,7 +214,7 @@ private[server] final class NativeHttpServer(
               // The forked handler owns the permit and governor counter only once forkTracked
               // succeeds; if anything before that failed, this effect releases them.
               connectionSemaphore.release.eru.attempt.flatMap { _ =>
-                clientIp.foreach { ip => perIpGovernor.foreach(_.releaseConnection(ip)) }
+                trackedIp.foreach { ip => perIpGovernor.foreach(_.releaseConnection(ip)) }
                 Eru.unit
               }
             }
@@ -262,7 +268,17 @@ private[server] final class NativeHttpServer(
     */
   private sealed trait ConnectionGate
   private object ConnectionGate {
-    final case class Accepted(ip: Option[IpKey]) extends ConnectionGate
+
+    /** Connection allowed. `address` is the resolved client address (TCP peer, or PROXY-derived —
+      * it is carried even when governance is off, so `Request.clientAddress` always has it);
+      * `fromProxy` records whether a PROXY v2 preamble supplied it; `tracked` is the governor's key
+      * when per-IP governance admitted the connection (released on handler exit).
+      */
+    final case class Accepted(
+      address: Option[java.net.InetAddress],
+      fromProxy: Boolean,
+      tracked: Option[IpKey]
+    ) extends ConnectionGate
     case object Rejected extends ConnectionGate
   }
 
@@ -291,6 +307,7 @@ private[server] final class NativeHttpServer(
   private def gateConnection(socket: SocketChannel): Eru[HttpError, ConnectionGate] =
     Eru.effect {
       var proxyRejected = false
+      var fromProxy = false
       val clientAddr: Option[java.net.InetAddress] =
         if config.proxyProtocolMode == ProxyProtocolMode.Off then tcpPeerAddress(socket)
         else {
@@ -298,6 +315,7 @@ private[server] final class NativeHttpServer(
           val result = ProxyProtocol.parse(Array.empty, in)
           result match {
             case ProxyProtocol.ParseResult.Parsed(header, _) =>
+              fromProxy = header.clientAddr.isDefined
               header.clientAddr.orElse(tcpPeerAddress(socket))
             case ProxyProtocol.ParseResult.NotProxyProtocol(peeked) =>
               if config.proxyProtocolMode == ProxyProtocolMode.Required then {
@@ -315,10 +333,10 @@ private[server] final class NativeHttpServer(
 
       val gateDecision: ConnectionGate =
         if proxyRejected then ConnectionGate.Rejected
-        else if !config.perIpGovernanceEnabled then ConnectionGate.Accepted(None)
+        else if !config.perIpGovernanceEnabled then ConnectionGate.Accepted(clientAddr, fromProxy, None)
         else
           perIpGovernor match {
-            case None => ConnectionGate.Accepted(None)
+            case None => ConnectionGate.Accepted(clientAddr, fromProxy, None)
             case Some(governor) =>
               clientAddr match {
                 case None =>
@@ -327,7 +345,7 @@ private[server] final class NativeHttpServer(
                   val ip = IpKey.fromInetAddress(addr)
                   governor.tryAcquireConnection(ip) match {
                     case PerIpGovernor.AcquireResult.Ok =>
-                      ConnectionGate.Accepted(Some(ip))
+                      ConnectionGate.Accepted(clientAddr, fromProxy, Some(ip))
                     case _ =>
                       ConnectionGate.Rejected
                   }
@@ -436,7 +454,7 @@ private[server] final class NativeHttpServer(
       _ <-
         if isHttp2 then {
           maybeSslChannel match {
-            case Some(ssl) => handleHttp2Connection(ssl)
+            case Some(ssl) => handleHttp2Connection(ssl, socket)
             case None => handleRequestLoop(channel, socket)
           }
         } else {
@@ -470,7 +488,7 @@ private[server] final class NativeHttpServer(
     * Response body bytes are read from `unsafeArray` — zero-copy, since `sendResponse` only reads
     * the array when serializing DATA frames.
     */
-  private def handleHttp2Connection(channel: SSLSocketChannel): Eru[HttpError, Unit] = {
+  private def handleHttp2Connection(channel: SSLSocketChannel, rawSocket: SocketChannel): Eru[HttpError, Unit] = {
     H2ServerConnection.accept(channel).mapError(h2ErrorToHttpError).flatMap { h2conn =>
       def loop(): Eru[HttpError, Unit] = {
         h2conn
@@ -481,7 +499,10 @@ private[server] final class NativeHttpServer(
               convertH2RequestToRequest(h2Headers, body)
                 .mapError(e => HttpError.InvalidRequest(InvalidRequest(e.message, "RFC 9113")))
                 .flatMap { request =>
-                  request.validate.mapError(HttpError.InvalidRequest.apply).flatMap { validRequest =>
+                  // Expose the resolved client address on the request (see resolveClientAddress):
+                  // the same resolution PerIpGovernor uses, so both surfaces agree.
+                  val decorated = request.copy(clientAddress = resolveClientAddress(request, rawSocket))
+                  decorated.validate.mapError(HttpError.InvalidRequest.apply).flatMap { validRequest =>
                     checkStrictPath(validRequest) match {
                       case Some(err) => errorToResponse(err)
                       case None => handler(validRequest)
@@ -754,13 +775,17 @@ private[server] final class NativeHttpServer(
             )
         }
 
-        rateCheck <- checkRequestRate(request, socket)
+        // Expose the resolved client address on the request (see resolveClientAddress): the same
+        // resolution PerIpGovernor uses, so `RateLimit`-style consumers key on identical facts.
+        decorated = request.copy(clientAddress = resolveClientAddress(request, socket))
+
+        rateCheck <- checkRequestRate(decorated, socket)
         result <- rateCheck match {
           case Some(retryAfter) =>
             send429Response(channel, writeBuffer, retryAfter)
-              .map(_ => shouldKeepAlive(request, empty429Response))
+              .map(_ => shouldKeepAlive(decorated, empty429Response))
           case None =>
-            runHandlerAndWrite(request, channel, writeBuffer, reader)
+            runHandlerAndWrite(decorated, channel, writeBuffer, reader)
         }
       } yield result
 
@@ -813,8 +838,8 @@ private[server] final class NativeHttpServer(
       if !config.perIpGovernanceEnabled then None
       else
         perIpGovernor.flatMap { governor =>
-          Option(clientIps.get(socket)).flatMap { peerIp =>
-            val subjectIp = resolveRateLimitIp(request, peerIp)
+          Option(clientIps.get(socket)).flatMap { case (peerAddr, _) =>
+            val subjectIp = resolveRateLimitIp(request, IpKey.fromInetAddress(peerAddr))
             governor.tryAcquireRequest(subjectIp) match {
               case PerIpGovernor.AcquireResult.Ok => None
               case _ => Some(governor.requestRateRetryAfterSeconds(subjectIp))
@@ -828,6 +853,12 @@ private[server] final class NativeHttpServer(
     *
     * Extracted from the for-comprehension inside `runRequestLoop` so the rate-limit path can
     * short-circuit before ever reaching the handler.
+    *
+    * Pending-WebSocket registry discipline: if the handler answers a marked 101, its registry entry
+    * is claimed (removed) here — immediately on handler return, before the write — so a failed or
+    * interrupted write cannot strand the process-global entry. If the handler fails or answers
+    * anything else, `dropPendingFor` reclaims whatever the handler may have registered for this
+    * request (a wrapping middleware can discard a marked 101 after the insert).
     */
   private def runHandlerAndWrite(
     request: Request[Body],
@@ -838,13 +869,22 @@ private[server] final class NativeHttpServer(
     for {
       handlerResult <- handler(request).attempt
 
+      claimed: Option[WebSocketServer.PendingWebSocket] <- handlerResult match {
+        case Result.Success(resp) if WebSocketServer.isUpgradeResponse(resp) =>
+          Eru.succeed(WebSocketServer.getHandlerId(resp).flatMap(WebSocketServer.retrieveHandler))
+        case Result.Success(_) =>
+          Eru.succeed { WebSocketServer.dropPendingFor(request); None }
+        case Result.Failure(_) =>
+          Eru.succeed { WebSocketServer.dropPendingFor(request); None }
+      }
+
       response <- handlerResult match {
         case Result.Success(resp) => addConnectionHeader(request, resp)
         case Result.Failure(httpError: HttpError) =>
           errorToResponse(httpError).flatMap(addConnectionHeader(request, _))
       }
 
-      isWebSocketUpgrade = WebSocketServer.isUpgradeResponse(response)
+      isWebSocketUpgrade = claimed.isDefined
 
       responseToSend =
         if isWebSocketUpgrade then response.copy(headers = response.headers.remove("X-WebSocket-Handler-Id"))
@@ -854,21 +894,16 @@ private[server] final class NativeHttpServer(
 
       keepAlive <-
         if isWebSocketUpgrade then {
-          WebSocketServer.getHandlerId(response) match {
-            case Some(handlerId) =>
-              WebSocketServer.retrieveHandler(handlerId) match {
-                case Some(pending) =>
-                  val wsConn = NativeServerWebSocketConnection.create(
-                    channel,
-                    reader,
-                    pending.config,
-                    pending.subprotocol,
-                    pending.request
-                  )
-                  pending.handler(wsConn).attempt.map(_ => false)
-                case None =>
-                  Eru.succeed(shouldKeepAlive(request, responseToSend))
-              }
+          claimed match {
+            case Some(pending) =>
+              val wsConn = NativeServerWebSocketConnection.create(
+                channel,
+                reader,
+                pending.config,
+                pending.subprotocol,
+                pending.request
+              )
+              pending.handler(wsConn).attempt.map(_ => false)
             case None =>
               Eru.succeed(shouldKeepAlive(request, responseToSend))
           }
@@ -1034,6 +1069,27 @@ private[server] final class NativeHttpServer(
       HttpWriter.writeResponseWithBuffer(channel, response, writeBuffer).attempt.map(_ => ())
     }
   }
+
+  /** Resolve the client address to expose on `Request.clientAddress`.
+    *
+    * The same resolution `PerIpGovernor` uses, so rate limiting and this surface can never
+    * disagree: the connection-level address captured at accept time (the TCP peer, or the address a
+    * PROXY v2 preamble carried), then — when that address falls inside `config.trustedProxies` and
+    * the request carries `X-Forwarded-For` — the leftmost untrusted XFF entry. Malformed XFF falls
+    * back to the connection-level address, exactly like the rate-limit path.
+    */
+  private def resolveClientAddress(request: Request[Body], socket: SocketChannel): Option[ClientAddress] =
+    Option(clientIps.get(socket)).map { case (addr, fromProxy) =>
+      val source = if fromProxy then ClientAddress.Source.ProxyProtocol else ClientAddress.Source.TcpPeer
+      val fallback = ClientAddress(addr, source)
+      val peerTrusted = config.trustedProxies.exists(_.contains(IpKey.fromInetAddress(addr)))
+      if !peerTrusted then fallback
+      else
+        request.headers.getFirst("X-Forwarded-For").flatMap(h => leftmostUntrustedIp(h.value)) match {
+          case Some(ip) => ClientAddress(ip.toInetAddress, ClientAddress.Source.ForwardedFor)
+          case None => fallback
+        }
+    }
 
   /** Resolve the rate-limit-subject IP for a request.
     *

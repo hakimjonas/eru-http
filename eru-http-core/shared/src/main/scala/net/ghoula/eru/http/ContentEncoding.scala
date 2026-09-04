@@ -7,7 +7,7 @@ import net.ghoula.eru.*
   * Content codings are primarily used to allow a representation's data to be compressed or
   * otherwise usefully transformed without losing the identity of its underlying media type.
   */
-enum ContentEncoding {
+enum ContentEncoding derives CanEqual {
 
   /** GZIP compression (RFC 1952). Most widely supported compression format.
     */

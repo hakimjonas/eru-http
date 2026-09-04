@@ -69,6 +69,36 @@ class CoreTypesSpec extends FunSuite {
     assertEquals(error.rfc, "RFC 10008 Section 2")
   }
 
+  test("Request attributes: typed channel round-trips, composes, and survives copy") {
+    val traceKey = AttributeKey[String]("melian-trace-id")
+    val depthKey = AttributeKey[Int]("melian-depth")
+
+    val request = Request
+      .get(Uri.https("example.com"))
+      .withAttribute(traceKey, "abc-123")
+      .withAttribute(depthKey, 7)
+
+    assertEquals(request.attribute(traceKey), Some("abc-123"))
+    assertEquals(request.attribute(depthKey), Some(7))
+
+    // Attributes survive copy and the with* builders.
+    val moved = request.withUri(Uri.https("other.example.com")).withMethod(Method.POST)
+    assertEquals(moved.attribute(traceKey), Some("abc-123"))
+
+    // Same name, different type: a different key, no collision.
+    assertEquals(request.attribute(AttributeKey[Int]("melian-trace-id")), None)
+
+    // Key equality is by (name, runtime class), not identity.
+    assertEquals(AttributeKey[String]("melian-trace-id"), traceKey)
+
+    // Re-attaching replaces.
+    assertEquals(request.withAttribute(traceKey, "zzz").attribute(traceKey), Some("zzz"))
+
+    // Client-constructed requests carry no client address and no attributes.
+    assertEquals(request.clientAddress, None)
+    assertEquals(Request.get(Uri.https("example.com")).attributes, Map.empty)
+  }
+
   test("StatusCode categorization works") {
     assert(StatusCode.Continue.isInformational)
     assert(!StatusCode.Continue.isSuccessful)
@@ -96,6 +126,120 @@ class CoreTypesSpec extends FunSuite {
 
     val unauthorized = StatusCode.Unauthorized.requiredHeaders
     assert(unauthorized.contains("WWW-Authenticate"))
+
+    // RFC 9110 Section 15.5.15: a 426 MUST include Upgrade, mirroring 405 → Allow.
+    val upgradeRequired = StatusCode.UpgradeRequired.requiredHeaders
+    assert(upgradeRequired.contains("Upgrade"))
+  }
+
+  test("StatusCode registry covers the IANA HTTP status code registry") {
+    val expected: Map[Int, String] = Map(
+      100 -> "Continue",
+      101 -> "Switching Protocols",
+      102 -> "Processing",
+      103 -> "Early Hints",
+      200 -> "OK",
+      201 -> "Created",
+      202 -> "Accepted",
+      203 -> "Non-Authoritative Information",
+      204 -> "No Content",
+      205 -> "Reset Content",
+      206 -> "Partial Content",
+      207 -> "Multi-Status",
+      208 -> "Already Reported",
+      226 -> "IM Used",
+      300 -> "Multiple Choices",
+      301 -> "Moved Permanently",
+      302 -> "Found",
+      303 -> "See Other",
+      304 -> "Not Modified",
+      305 -> "Use Proxy",
+      307 -> "Temporary Redirect",
+      308 -> "Permanent Redirect",
+      400 -> "Bad Request",
+      401 -> "Unauthorized",
+      402 -> "Payment Required",
+      403 -> "Forbidden",
+      404 -> "Not Found",
+      405 -> "Method Not Allowed",
+      406 -> "Not Acceptable",
+      407 -> "Proxy Authentication Required",
+      408 -> "Request Timeout",
+      409 -> "Conflict",
+      410 -> "Gone",
+      411 -> "Length Required",
+      412 -> "Precondition Failed",
+      413 -> "Content Too Large",
+      414 -> "URI Too Long",
+      415 -> "Unsupported Media Type",
+      416 -> "Range Not Satisfiable",
+      417 -> "Expectation Failed",
+      418 -> "I'm a teapot",
+      421 -> "Misdirected Request",
+      422 -> "Unprocessable Content",
+      423 -> "Locked",
+      424 -> "Failed Dependency",
+      425 -> "Too Early",
+      426 -> "Upgrade Required",
+      428 -> "Precondition Required",
+      429 -> "Too Many Requests",
+      431 -> "Request Header Fields Too Large",
+      451 -> "Unavailable For Legal Reasons",
+      500 -> "Internal Server Error",
+      501 -> "Not Implemented",
+      502 -> "Bad Gateway",
+      503 -> "Service Unavailable",
+      504 -> "Gateway Timeout",
+      505 -> "HTTP Version Not Supported",
+      506 -> "Variant Also Negotiates",
+      507 -> "Insufficient Storage",
+      508 -> "Loop Detected",
+      510 -> "Not Extended",
+      511 -> "Network Authentication Required"
+    )
+
+    expected.foreach { (code, phrase) =>
+      val sc = StatusCode(code).assertSuccess
+      assertEquals(sc.value, code)
+      assertEquals(sc.reasonPhrase, phrase, s"reason phrase for $code")
+    }
+
+    // The three the frameworks were forced to derive by hand.
+    assertEquals(StatusCode.NotAcceptable.value, 406)
+    assertEquals(StatusCode.UnprocessableContent.value, 422)
+    assertEquals(StatusCode.UpgradeRequired.value, 426)
+
+    // RFC 9110 Section 15.3.6: a 205 cannot contain content.
+    assert(!StatusCode.ResetContent.allowsResponseBody)
+    // Unregistered codes stay constructible and render a generic phrase.
+    assertEquals(StatusCode(599).assertSuccess.reasonPhrase, "Status 599")
+  }
+
+  test("Response.tooManyRequests renders delay-seconds and validates the delay") {
+    val resp =
+      Response.tooManyRequests(java.time.Duration.ofSeconds(30), Body.text("slow down")).assertSuccess
+    assertEquals(resp.status, StatusCode.TooManyRequests)
+    assertEquals(resp.headers.getFirst(HeaderNames.RetryAfter).map(_.value), Some("30"))
+    resp.validate.assertSuccess
+
+    // Sub-second precision truncates to whole seconds.
+    val truncated = Response.tooManyRequests(java.time.Duration.ofMillis(1500), Body.Empty).assertSuccess
+    assertEquals(truncated.headers.getFirst(HeaderNames.RetryAfter).map(_.value), Some("1"))
+
+    // RFC 9110 Section 14.2: delay-seconds is non-negative.
+    val negative = Response.tooManyRequests(java.time.Duration.ofSeconds(-5), Body.Empty).assertFailure
+    negative match {
+      case e: HeaderValue.InvalidHeaderValue => assert(e.reason.contains("cannot be negative"))
+      case other => fail(s"expected InvalidHeaderValue, got: $other")
+    }
+
+    // The HTTP-date overload answers with an IMF-fixdate.
+    val dated =
+      Response.tooManyRequests(java.time.Instant.parse("2026-09-03T12:00:00Z"), Body.Empty).assertSuccess
+    assertEquals(
+      dated.headers.getFirst(HeaderNames.RetryAfter).map(_.value),
+      Some("Thu, 03 Sep 2026 12:00:00 GMT")
+    )
   }
 
   test("Headers are case-insensitive") {

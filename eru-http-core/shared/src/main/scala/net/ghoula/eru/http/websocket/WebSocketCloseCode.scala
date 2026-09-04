@@ -12,6 +12,9 @@ opaque type WebSocketCloseCode = Int
 
 object WebSocketCloseCode {
 
+  /** Enables `==` under `-language:strictEquality`. */
+  given CanEqual[WebSocketCloseCode, WebSocketCloseCode] = CanEqual.derived
+
   /** 1000: Normal closure - the connection successfully completed its purpose.
     */
   val NormalClosure: WebSocketCloseCode = 1000

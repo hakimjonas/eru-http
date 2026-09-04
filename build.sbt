@@ -106,15 +106,24 @@ val jvmRunOptions = {
 ThisBuild / run / javaOptions ++= jvmRunOptions
 ThisBuild / Test / javaOptions ++= jvmRunOptions
 
+/* sbt 2 forks test JVMs with a clean environment, so HOSTILE=true on the command line never
+ * reached HostileTestBase. Forward both opt-in spellings (env var and system property) to the
+ * forked JVM; HOSTILE_TESTING.md documents both.
+ */
+ThisBuild / Test / envVars :=
+  Option(System.getenv("HOSTILE")).map(v => Map("HOSTILE" -> v)).getOrElse(Map.empty)
+ThisBuild / Test / javaOptions ++=
+  Option(System.getProperty("hostile")).map(v => s"-Dhostile=$v").toList
+
 /* Eru dependency version (published to Maven Central). */
-val eruVersion = "1.0.0-alpha"
+val eruVersion = "1.0.0-alpha.1"
 
 /* Custom clean task. */
 lazy val cleanAll = taskKey[Unit]("Clean all target directories including all subprojects")
 
 /* Root project. */
 lazy val root = (project in file("."))
-  .aggregate(coreJVM, client, server, examples, docs) /* Skip coreJS until Eru has JS support. */
+  .aggregate(coreJVM, client, server, acme, examples, docs) /* Skip coreJS until Eru has JS support. */
   .settings(commonSettings)
   .settings(
     name := "eru-http",
@@ -176,7 +185,7 @@ lazy val root = (project in file("."))
      */
     addCommandAlias(
       "testAll",
-      "coreJVM/Test/testFull;client/Test/testFull;server/Test/testFull;examples/Test/testFull"
+      "coreJVM/Test/testFull;client/Test/testFull;server/Test/testFull;acme/Test/testFull;examples/Test/testFull"
     ),
 
     /* Documentation commands. */
@@ -230,6 +239,18 @@ lazy val server = (project in file("eru-http-server"))
     libraryDependencies += caffeine
   )
   .dependsOn(coreJVM % "compile->compile;test->test")
+
+/* ACME / Let's Encrypt provisioning (JVM-only: JDK crypto, keystore, background renewal).
+ * Pure JDK — no new external dependencies. Depends on server for the HTTP-01 challenge
+ * responder (a Middleware over eru-http's handler shape) and for its own tests.
+ */
+lazy val acme = (project in file("eru-http-acme"))
+  .settings(commonSettings)
+  .settings(
+    name := "eru-http-acme",
+    description := "ACME (RFC 8555) certificate provisioning producing TlsConfig for Eru servers"
+  )
+  .dependsOn(coreJVM % "compile->compile;test->test", server, client)
 
 /* Examples and Benchmarks. */
 lazy val examples = (project in file("examples"))

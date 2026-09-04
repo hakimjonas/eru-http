@@ -40,6 +40,10 @@ trait HttpServer {
 
   /** Stops the server: stops accepting connections, closes client sockets, and interrupts handler
     * fibers; the shutdown waits for their finalizers, bounded by `gracefulShutdownTimeout`.
+    *
+    * Safe to call multiple times and concurrently (e.g. an explicit stop racing a JVM shutdown
+    * hook): the teardown is guarded by an atomic compare-and-set, so exactly one caller performs it
+    * and every later or concurrent call returns immediately.
     */
   def shutdown: Eru[HttpError, Unit]
 

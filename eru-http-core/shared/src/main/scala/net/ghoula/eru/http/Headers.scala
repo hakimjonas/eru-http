@@ -267,6 +267,9 @@ opaque type HeaderValue = String
 
 object HeaderValue {
 
+  /** Enables `==` under `-language:strictEquality`. */
+  given CanEqual[HeaderValue, HeaderValue] = CanEqual.derived
+
   /** Parses and validates a header value per RFC 9110 Section 5.5: VCHAR, SP, HTAB, and obs-text
     * (bytes 0x80-0xFF). CR/LF and other control characters are rejected.
     */
@@ -315,6 +318,9 @@ object HeaderValue {
 opaque type HeaderName = String
 
 object HeaderName {
+
+  /** Enables `==` under `-language:strictEquality`. */
+  given CanEqual[HeaderName, HeaderName] = CanEqual.derived
 
   /** Parses and validates a header name per RFC 9110 Section 5.1.
     */

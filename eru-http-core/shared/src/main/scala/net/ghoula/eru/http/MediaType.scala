@@ -10,7 +10,7 @@ final case class MediaType(
   mainType: String,
   subType: String,
   parameters: Map[String, String] = Map.empty
-) {
+) derives CanEqual {
 
   /** The full media type string including parameters.
     *

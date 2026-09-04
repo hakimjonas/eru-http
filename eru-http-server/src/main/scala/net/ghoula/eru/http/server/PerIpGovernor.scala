@@ -40,7 +40,9 @@ private[server] final class PerIpGovernor(
   import PerIpGovernor.*
 
   /** Bounded cache. Caffeine's `maximumSize` is a soft cap — the fail-closed `acquire*` methods
-    * enforce the hard cap by pre-checking `estimatedSize()` before put.
+    * enforce the hard cap through [[liveCount]] (an exact count maintained on the insert path)
+    * checked inside [[guard]], so concurrent first-touch inserts cannot overshoot and force
+    * Caffeine to evict a tracked attacker.
     */
   private val cache: Cache[IpKey, IpEntry] = Caffeine
     .newBuilder()
@@ -50,8 +52,20 @@ private[server] final class PerIpGovernor(
       if cause == RemovalCause.SIZE then {
         evictions.increment()
       }
+      // Every removal (size, expiry, invalidation) frees a tracked slot. The listener may run
+      // asynchronously, so liveCount can transiently over-count — that errs fail-closed (the
+      // guard rejects slightly early), never under-counts.
+      liveCount.decrementAndGet(): Unit
     }
     .build[IpKey, IpEntry]()
+
+  /** Exact number of entries we inserted into [[cache]] and that have not been removed yet. */
+  private val liveCount = new java.util.concurrent.atomic.AtomicLong(0)
+
+  /** Serializes the cache-miss path (check cap → insert → count). The path only runs on a miss —
+    * once per IP per the 10-minute expiry window — so the lock is off every hot path.
+    */
+  private val guard = new Object
 
   private val evictions = new java.util.concurrent.atomic.LongAdder()
 
@@ -151,23 +165,36 @@ private[server] final class PerIpGovernor(
   /** Get the per-IP entry, creating it if absent.
     *
     * Fail-closed hard cap: if the tracking map is at capacity and `ip` is unknown, returns `None`
-    * rather than letting Caffeine evict an existing entry. `estimatedSize` is
-    * eventually-consistent, so a transient over-count (by at most a few entries) is acceptable; an
-    * attacker cannot bulk-evict because each attempt is O(1) and rejected.
+    * rather than letting Caffeine evict an existing entry. The cap check uses [[liveCount]] — an
+    * exact counter, unlike Caffeine's eventually-consistent `estimatedSize` — inside the [[guard]]
+    * lock, so even fully concurrent first-touch inserts cannot overshoot the cap and trigger SIZE
+    * evictions. An attacker cannot bulk-evict: every attempt beyond the cap is O(1) and rejected.
     *
     * `asMap().putIfAbsent` gives atomic-if-absent semantics: a prior value means this fiber lost a
-    * race and another fiber's entry wins — ours is discarded and theirs is used.
+    * race and another fiber's entry wins — ours is discarded (no count, since the winner counted)
+    * and theirs is used.
     */
   private def getOrCreateEntry(ip: IpKey): Option[IpEntry] =
     Option(cache.getIfPresent(ip)).orElse {
-      if cache.estimatedSize() >= trackedIpCap then None
-      else {
-        val fresh = new IpEntry(
-          new AtomicInteger(0),
-          new TokenBucket(acceptBurstPerIp, acceptRatePerIp),
-          new TokenBucket(burstSizePerIp, requestsPerSecondPerIp)
-        )
-        Some(Option(cache.asMap().putIfAbsent(ip, fresh)).getOrElse(fresh))
+      guard.synchronized {
+        // Re-check inside the lock: another thread may have inserted this IP between our miss
+        // and acquiring the lock.
+        Option(cache.getIfPresent(ip)).orElse {
+          if liveCount.get() >= trackedIpCap.toLong then None
+          else {
+            val fresh = new IpEntry(
+              new AtomicInteger(0),
+              new TokenBucket(acceptBurstPerIp, acceptRatePerIp),
+              new TokenBucket(burstSizePerIp, requestsPerSecondPerIp)
+            )
+            Option(cache.asMap().putIfAbsent(ip, fresh)) match {
+              case None =>
+                liveCount.incrementAndGet()
+                Some(fresh)
+              case Some(winner) => Some(winner)
+            }
+          }
+        }
       }
     }
 }

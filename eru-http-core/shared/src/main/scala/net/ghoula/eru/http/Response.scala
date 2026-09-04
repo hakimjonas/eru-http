@@ -1,5 +1,8 @@
 package net.ghoula.eru.http
 
+import java.time.Duration
+import java.time.Instant
+
 import net.ghoula.eru.*
 
 /** HTTP response as defined in RFC 9110.
@@ -124,6 +127,22 @@ final case class Response[+A](
     */
   def withETag(etag: ETag): Eru[HeaderName.InvalidHeaderName | HeaderValue.InvalidHeaderValue, Response[A]] =
     setHeader(HeaderNames.ETag, etag.headerValue)
+
+  /** Appends a `Set-Cookie` header for `cookie` (RFC 6265 Section 4.1).
+    *
+    * Appends rather than replaces: `Set-Cookie` is the one field RFC 9110 Section 5.5 exempts from
+    * list combination, so several middlewares can each contribute a cookie without clobbering the
+    * others.
+    *
+    * @param cookie
+    *   the cookie to add
+    * @return
+    *   the updated response or an error
+    */
+  def addCookie(
+    cookie: Cookie
+  ): Eru[HeaderName.InvalidHeaderName | HeaderValue.InvalidHeaderValue, Response[A]] =
+    addHeader(HeaderNames.SetCookie, cookie.toSetCookieHeader)
 
   /** Encodes a value as the response body using a BodyEncoder.
     */
@@ -308,6 +327,54 @@ object Response {
     */
   def internalServerError(body: Body): Response[Body] =
     Response(StatusCode.InternalServerError, Headers.empty, body)
+
+  /** Creates a 429 Too Many Requests response with a `Retry-After` header (RFC 9110 Sections
+    * 15.5.14 and 14.2).
+    *
+    * The delay is rendered as non-negative `delay-seconds`; sub-second precision is truncated. Use
+    * the [[tooManyRequests(retryAt: java.time.Instant, body: Body)*]] overload to answer with an
+    * absolute `HTTP-date` instead.
+    *
+    * @param retryAfter
+    *   how long the client should wait before retrying
+    * @param body
+    *   the response body
+    * @return
+    *   a 429 response or an error (negative delays are invalid per RFC 9110 Section 14.2)
+    */
+  def tooManyRequests(
+    retryAfter: Duration,
+    body: Body
+  ): Eru[HeaderName.InvalidHeaderName | HeaderValue.InvalidHeaderValue, Response[Body]] =
+    if retryAfter.isNegative then {
+      Eru.fail(
+        HeaderValue.InvalidHeaderValue(
+          retryAfter.toString,
+          "Retry-After delay-seconds cannot be negative",
+          "RFC 9110 Section 14.2"
+        )
+      )
+    } else {
+      Response(StatusCode.TooManyRequests, Headers.empty, body)
+        .setHeader(HeaderNames.RetryAfter, retryAfter.toSeconds.toString)
+    }
+
+  /** Creates a 429 Too Many Requests response with an absolute `Retry-After` date (RFC 9110
+    * Sections 15.5.14 and 14.2).
+    *
+    * @param retryAt
+    *   the point in time after which the client may retry
+    * @param body
+    *   the response body
+    * @return
+    *   a 429 response or an error
+    */
+  def tooManyRequests(
+    retryAt: Instant,
+    body: Body
+  ): Eru[HeaderName.InvalidHeaderName | HeaderValue.InvalidHeaderValue, Response[Body]] =
+    Response(StatusCode.TooManyRequests, Headers.empty, body)
+      .setHeader(HeaderNames.RetryAfter, HttpDate.format(retryAt))
 
   /** Creates an SSE (Server-Sent Events) response from an event stream.
     *

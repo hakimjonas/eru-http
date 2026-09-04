@@ -45,6 +45,9 @@ object Method {
     */
   val QUERY: Method = "QUERY"
 
+  /** Enables `==` under `-language:strictEquality`. */
+  given CanEqual[Method, Method] = CanEqual.derived
+
   /** Parser for custom HTTP methods.
     *
     * Per RFC 9110 Section 9.1, method names are case-sensitive and must consist of token characters

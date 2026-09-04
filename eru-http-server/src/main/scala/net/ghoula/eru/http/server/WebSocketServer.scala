@@ -111,13 +111,34 @@ object WebSocketServer {
     subprotocol: Option[String]
   )
 
+  /** In-flight upgrade handoffs, keyed by the marker the upgrade response carries.
+    *
+    * Lifetime contract: an entry is inserted only after the handshake validates, and it leaves the
+    * map when `NativeHttpServer` claims it (immediately on handler return, before the 101 is
+    * written) or when `dropPendingFor` reclaims it (handler failure, or a non-101 answer for the
+    * same request). Entries therefore live for the microseconds between insert and claim; the map
+    * is process-global, so a wrapping middleware that delegates to the upgrade handler and then
+    * never returns could still orphan an entry — `MaxPendingHandlers` is the circuit breaker that
+    * keeps even that pathological case bounded.
+    */
   private val pendingHandlers = new ConcurrentHashMap[String, PendingWebSocket]()
   private val handlerIdCounter = new AtomicLong(0)
+
+  /** Circuit breaker for the process-global registry. Reaching this many simultaneous in-flight
+    * handoffs means the reclaim paths have failed; the registry is dropped wholesale (live entries
+    * would be re-requested by their owners within microseconds anyway).
+    */
+  private val MaxPendingHandlers = 10_000
+
+  /** Current registry size. Test hook for the leak assertions.
+    */
+  private[server] def pendingHandlerCount: Int = pendingHandlers.size()
 
   /** Handle a WebSocket upgrade request.
     *
     * This creates the upgrade response and registers the handler for later execution. The
-    * NativeHttpServer detects 101 responses and retrieves the handler to complete the upgrade.
+    * NativeHttpServer detects 101 responses, claims the registered handler, and completes the
+    * upgrade.
     *
     * If `config.allowedOrigins` is `Some(list)`, the request's `Origin` header MUST exactly match
     * one of the listed values (case-insensitive). Mismatch / missing Origin → 403 Forbidden,
@@ -135,18 +156,23 @@ object WebSocketServer {
         val requestedSubprotocols = WebSocketHandshake.extractSubprotocols(request)
         val selectedSubprotocol = selectSubprotocol(requestedSubprotocols, config.allowedSubprotocols)
         val handlerId = handlerIdCounter.incrementAndGet().toString
-        pendingHandlers.put(handlerId, PendingWebSocket(wsHandler, config, request, selectedSubprotocol))
 
         for {
           key <- WebSocketHandshake.extractKey(request).mapError { wsError =>
             HttpError.InvalidRequest(InvalidRequest(wsError.errorMessage, "RFC 6455"))
           }
           response <- WebSocketHandshake.createUpgradeResponse(key, selectedSubprotocol)
-          responseWithMarker = response.copy(
-            headers = response.headers
-              .unsafeAdd("X-WebSocket-Handler-Id", HeaderValue.unsafeFromString(handlerId))
-          )
-        } yield responseWithMarker
+          // Register only after the handshake validates: the insert is the last step before the
+          // marked response is returned, and everything between insert and return is pure — no
+          // effect boundary where an interruption could land and strand the entry.
+          _ = {
+            if pendingHandlers.size() >= MaxPendingHandlers then pendingHandlers.clear()
+            pendingHandlers.put(handlerId, PendingWebSocket(wsHandler, config, request, selectedSubprotocol))
+          }
+        } yield response.copy(
+          headers = response.headers
+            .unsafeAdd("X-WebSocket-Handler-Id", HeaderValue.unsafeFromString(handlerId))
+        )
     }
 
   /** Check the `Origin` header against `config.allowedOrigins`. Returns `None` if the check passes
@@ -173,10 +199,25 @@ object WebSocketServer {
 
   /** Retrieve and remove a pending WebSocket handler by ID.
     *
-    * Called by NativeHttpServer after detecting a 101 response.
+    * Called by NativeHttpServer as soon as the handler returns a marked 101 — before the response
+    * is written — so a failed or interrupted write cannot strand the entry in the registry.
     */
   private[server] def retrieveHandler(handlerId: String): Option[PendingWebSocket] = {
     Option(pendingHandlers.remove(handlerId))
+  }
+
+  /** Reclaim any entry registered while handling `request`, comparing by reference identity.
+    *
+    * Covers composition paths the id-based claim cannot see: a middleware wrapping `upgradeHandler`
+    * can discard a marked 101 after the registry insert (the id then never reaches the wire), and a
+    * failing handler run may have inserted before failing. Entries live in the registry for
+    * microseconds, so this sweep only ever visits in-flight or orphaned entries.
+    */
+  private[server] def dropPendingFor(request: Request[Body]): Unit = {
+    val it = pendingHandlers.values().iterator()
+    while it.hasNext do {
+      if it.next().request eq request then it.remove()
+    }
   }
 
   /** Check if a response is a WebSocket upgrade response.

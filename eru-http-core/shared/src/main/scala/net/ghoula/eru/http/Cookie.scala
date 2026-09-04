@@ -40,7 +40,7 @@ final case class Cookie(
   secure: Boolean = false,
   httpOnly: Boolean = false,
   sameSite: Option[SameSite] = None
-) {
+) derives CanEqual {
 
   /** Converts this cookie to a Set-Cookie header value per RFC 6265 Section 4.1.
     *
@@ -345,7 +345,7 @@ object Cookie {
   * The SameSite attribute controls whether cookies are sent with cross-site requests, providing
   * protection against CSRF attacks.
   */
-enum SameSite(val value: String) {
+enum SameSite(val value: String) derives CanEqual {
 
   /** Strict mode: Cookie only sent with same-site requests.
     */
