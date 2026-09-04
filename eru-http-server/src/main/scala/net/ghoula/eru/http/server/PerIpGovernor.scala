@@ -167,9 +167,8 @@ private[server] final class PerIpGovernor(
     * Fail-closed hard cap: if the tracking map is at capacity and `ip` is unknown, returns `None`
     * rather than letting Caffeine evict an existing entry. The cap check uses [[liveCount]] — an
     * exact counter, unlike Caffeine's eventually-consistent `estimatedSize` — inside the [[guard]]
-    * lock, so even fully concurrent first-touch inserts cannot overshoot the cap and trigger
-    * SIZE evictions. An attacker cannot bulk-evict: every attempt beyond the cap is O(1) and
-    * rejected.
+    * lock, so even fully concurrent first-touch inserts cannot overshoot the cap and trigger SIZE
+    * evictions. An attacker cannot bulk-evict: every attempt beyond the cap is O(1) and rejected.
     *
     * `asMap().putIfAbsent` gives atomic-if-absent semantics: a prior value means this fiber lost a
     * race and another fiber's entry wins — ours is discarded (no count, since the winner counted)
@@ -188,11 +187,11 @@ private[server] final class PerIpGovernor(
               new TokenBucket(acceptBurstPerIp, acceptRatePerIp),
               new TokenBucket(burstSizePerIp, requestsPerSecondPerIp)
             )
-            cache.asMap().putIfAbsent(ip, fresh) match {
-              case null =>
+            Option(cache.asMap().putIfAbsent(ip, fresh)) match {
+              case None =>
                 liveCount.incrementAndGet()
-                Some(fresh) // scalafix:ok DisableSyntax.null
-              case winner => Some(winner)
+                Some(fresh)
+              case Some(winner) => Some(winner)
             }
           }
         }
