@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build metadata, and documentation. LGPL keeps the copyleft protection of the source while
   permitting applications to link and use the libraries without license obligations on
   application code.
+- **Dependency** — `eru-core`/`eru-runtime` moved to 1.0.0-alpha.2 (license-metadata-only
+  upstream release; no API change).
 
 ## [1.0.0-alpha.2] - 2026-09
 

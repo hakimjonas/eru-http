@@ -116,7 +116,7 @@ ThisBuild / Test / javaOptions ++=
   Option(System.getProperty("hostile")).map(v => s"-Dhostile=$v").toList
 
 /* Eru dependency version (published to Maven Central). */
-val eruVersion = "1.0.0-alpha.1"
+val eruVersion = "1.0.0-alpha.2"
 
 /* Custom clean task. */
 lazy val cleanAll = taskKey[Unit]("Clean all target directories including all subprojects")
