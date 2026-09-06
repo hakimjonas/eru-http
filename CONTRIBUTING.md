@@ -1,6 +1,6 @@
 # Contributing
 
-eru-http is developed by Hakim Jonas Ghoula and licensed under the GNU General Public License v3.0 or later.
+eru-http is developed by Hakim Jonas Ghoula and licensed under the GNU Lesser General Public License v3.0 or later.
 
 ## Build
 
