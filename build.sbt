@@ -7,7 +7,7 @@ ThisBuild / semanticdbVersion := scalafixSemanticdb.revision
 ThisBuild / organization := "net.ghoula"
 ThisBuild / versionScheme := Some("early-semver")
 ThisBuild / organizationName := "Hakim Ghoula"
-ThisBuild / licenses := Seq("GPL-3.0-or-later" -> url("https://www.gnu.org/licenses/gpl-3.0.txt"))
+ThisBuild / licenses := Seq("LGPL-3.0-or-later" -> url("https://www.gnu.org/licenses/lgpl-3.0.txt"))
 ThisBuild / homepage := Some(uri("https://github.com/hakimjonas/eru-http"))
 ThisBuild / developers := List(
   Developer(

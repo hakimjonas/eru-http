@@ -75,4 +75,4 @@ eru-http is at version @VERSION@. The API may change before 1.0.0.
 
 ## Contributing
 
-eru-http is designed and developed by Hakim Jonas Ghoula and licensed under the GNU General Public License v3.0 or later. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and build commands.
+eru-http is designed and developed by Hakim Jonas Ghoula and licensed under the GNU Lesser General Public License v3.0 or later. See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and build commands.
