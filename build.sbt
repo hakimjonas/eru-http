@@ -1,7 +1,7 @@
 import Dependencies.*
 
 /* ===== Build-wide Settings ===== */
-ThisBuild / scalaVersion := "3.8.4"
+ThisBuild / scalaVersion := "3.9.0"
 ThisBuild / semanticdbEnabled := true
 ThisBuild / semanticdbVersion := scalafixSemanticdb.revision
 ThisBuild / organization := "net.ghoula"
@@ -42,6 +42,7 @@ ThisBuild / Test / publishArtifact := false
 lazy val sharedScalacOptions = Seq(
   "-encoding",
   "UTF-8",
+  "-deprecation",
   "-feature",
   "-Werror",
   "-Wunused:all",
