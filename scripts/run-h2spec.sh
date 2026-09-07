@@ -77,13 +77,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Wait for server to start
+# Wait for the server's TLS port to actually accept connections. A cold CI
+# runner compiles the examples module inside this background sbt invocation —
+# minutes, not seconds — so poll rather than sleep, and fail fast if the
+# server process dies mid-compile. Poll IPv4 explicitly: h2spec resolves
+# 'localhost' to ::1 first, and a refused ::1 used to read as 'server down'
+# even when the server was listening on the v4 wildcard.
 echo "Waiting for server to start..."
-sleep 5
-
-# Check if server is running
-if ! kill -0 $SERVER_PID 2>/dev/null; then
-    echo "Server failed to start!"
+READY=0
+for i in $(seq 1 120); do
+    if ! kill -0 $SERVER_PID 2>/dev/null; then
+        echo "Server process exited before becoming ready — see sbt output above."
+        exit 1
+    fi
+    if (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null; then
+        READY=1
+        echo "Server accepting connections on 127.0.0.1:$PORT (check #$i)."
+        break
+    fi
+    sleep 5
+done
+if [ "$READY" -ne 1 ]; then
+    echo "Server did not accept connections on 127.0.0.1:$PORT within 10 minutes."
     exit 1
 fi
 
@@ -94,7 +109,9 @@ echo ""
 # Run h2spec
 # -t: Use TLS
 # -k: Skip certificate verification (self-signed cert)
-$H2SPEC -h localhost -p $PORT -t -k $VERBOSE $STRICT $SECTION
+# 127.0.0.1 explicitly: 'localhost' resolves to ::1 first and fails on
+# v4-bound servers regardless of readiness.
+$H2SPEC -h 127.0.0.1 -p $PORT -t -k $VERBOSE $STRICT $SECTION
 
 EXIT_CODE=$?
 
