@@ -4,7 +4,7 @@ object Dependencies {
   /* Versions. */
   val munitVersion = "1.3.6"
   val brotli4jVersion = "1.23.0"
-  val caffeineVersion = "3.2.4"
+  val caffeineVersion = "3.3.0"
 
   /* Testing. */
   val munit = "org.scalameta" %% "munit" % munitVersion
