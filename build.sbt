@@ -1,7 +1,7 @@
 import Dependencies.*
 
 /* ===== Build-wide Settings ===== */
-ThisBuild / scalaVersion := "3.9.0"
+ThisBuild / scalaVersion := "3.10.0"
 ThisBuild / semanticdbEnabled := true
 ThisBuild / semanticdbVersion := scalafixSemanticdb.revision
 ThisBuild / organization := "net.ghoula"
