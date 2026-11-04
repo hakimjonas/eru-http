@@ -3,7 +3,7 @@ import sbt._
 object Dependencies {
   /* Versions. */
   val munitVersion = "1.3.6"
-  val brotli4jVersion = "1.23.0"
+  val brotli4jVersion = "1.24.0"
   val caffeineVersion = "3.3.1"
 
   /* Testing. */
